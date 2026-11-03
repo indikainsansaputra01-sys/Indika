@@ -1,0 +1,6 @@
+{
+  "name": "Finish Pallet Management System",
+  "description": "Sistem monitoring, pencatatan stok, penerimaan, pengeluaran, dan aktivitas pallet pada area Finish Pallet di lingkungan pabrik.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

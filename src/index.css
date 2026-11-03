@@ -1,0 +1,457 @@
+@import "tailwindcss";
+
+@variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* Enterprise Indah Kiat Design System Tokens */
+  --color-sky-primary: #8CCCF0;
+  --color-navy-deep: #163653;
+  --color-action-blue: #3886B8;
+  --color-page-bg: #F1F5F9;
+  --color-card-bg: #FFFFFF;
+  --color-primary-text: #0F172A;
+  --color-secondary-text: #334155;
+  --color-border-color: #E2E8F0;
+  --color-success-green: #16805D;
+  --color-warning-orange: #D97706;
+  --color-critical-red: #EF4444;
+}
+
+@layer base {
+  :root {
+    --color-sky: #8CCCF0;
+    --color-navy: #163653;
+    --color-action: #3886B8;
+    --color-canvas: #F1F5F9;
+    --color-surface: #FFFFFF;
+    --color-text-main: #0F172A;
+    --color-text-muted: #334155;
+    --color-border: #CBD5E1;
+    --color-success: #16805D;
+    --color-warning: #D97706;
+    --color-critical: #EF4444;
+  }
+
+  *, *::before, *::after {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  html, body {
+    font-family: var(--font-sans);
+    letter-spacing: -0.011em;
+    background-color: #F1F5F9;
+    color: #0F172A;
+  }
+
+  button, input, select, textarea, optgroup {
+    font-family: var(--font-sans);
+  }
+
+  /* Monospace for numbers, tags, & technical IDs */
+  .font-mono, [data-mono="true"] {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+
+  /* Enterprise Typography Weight Calibration */
+  /* Keeps typography clean, sleek, and elegant (eliminates cartoonish, overly bold text) */
+  .font-black {
+    font-weight: 700 !important;
+  }
+  .font-extrabold {
+    font-weight: 600 !important;
+  }
+  .font-bold {
+    font-weight: 600 !important;
+  }
+  .font-semibold {
+    font-weight: 550 !important;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-weight: 600;
+    letter-spacing: -0.015em;
+  }
+}
+
+/* ========================================================
+   ENTERPRISE INDAH KIAT PALLET MANAGEMENT SYSTEM TOKENS
+   Deep Navy #163653 | Sky Blue #8CCCF0 | Action Blue #3886B8
+   Page #F1F5F9 | Text #0F172A & #334155 | Border #E2E8F0
+   ======================================================== */
+.bg-slate-900:not([data-theme-ignore="true"]) {
+  background-color: #163653 !important;
+}
+
+.bg-slate-950:not([data-theme-ignore="true"]) {
+  background-color: #112B43 !important;
+}
+
+.border-slate-800:not([data-theme-ignore="true"]) {
+  border-color: #1E4366 !important;
+}
+
+.border-slate-700:not([data-theme-ignore="true"]) {
+  border-color: #234F77 !important;
+}
+
+/* Light mode table and card contrast: crisp, bold headers without washed out gray */
+html:not(.dark) table thead th {
+  background-color: #F1F5F9 !important;
+  color: #0F172A !important;
+  font-weight: 700 !important;
+  border-bottom: 2px solid #CBD5E1 !important;
+  letter-spacing: 0.025em;
+}
+
+html:not(.dark) table tbody tr {
+  border-color: #E2E8F0 !important;
+}
+
+html:not(.dark) table tbody tr:hover {
+  background-color: rgba(226, 232, 240, 0.45) !important;
+}
+
+html:not(.dark) .border-slate-200 {
+  border-color: #CBD5E1 !important;
+}
+
+html:not(.dark) .border-slate-100 {
+  border-color: #E2E8F0 !important;
+}
+
+html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #CBD5E1 !important;
+}
+
+html:not(.dark) .divide-slate-100 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #E2E8F0 !important;
+}
+
+/* Light mode high-contrast text enhancements so nothing looks washed out / nyaru */
+html:not(.dark) .text-slate-400 {
+  color: #334155 !important;
+}
+
+html:not(.dark) .text-slate-500 {
+  color: #1E293B !important;
+}
+
+html:not(.dark) .text-slate-600 {
+  color: #0F172A !important;
+}
+
+html:not(.dark) .text-\[\#64748B\] {
+  color: #334155 !important;
+}
+
+html:not(.dark) .text-\[\#94A3B8\] {
+  color: #475569 !important;
+}
+
+html:not(.dark) input::placeholder,
+html:not(.dark) textarea::placeholder {
+  color: #64748B !important;
+}
+
+/* ========================================================
+   GLOBAL DARK MODE STYLES & SURFACE CONTRAST
+   Tampilan Enterprise High-Contrast & Legibility Tinggi
+   ======================================================== */
+html.dark, html.dark body {
+  background-color: #0A121E !important;
+  color: #F8FAFC !important;
+  color-scheme: dark;
+}
+
+/* Surfaces & Containers in Dark Mode */
+html.dark .bg-white:not([data-theme-ignore="true"]) {
+  background-color: #0F1D2F !important;
+}
+
+html.dark .bg-slate-50:not([data-theme-ignore="true"]) {
+  background-color: #0A121E !important;
+}
+
+html.dark .bg-slate-100:not([data-theme-ignore="true"]) {
+  background-color: #16263B !important;
+}
+
+html.dark .bg-slate-200:not([data-theme-ignore="true"]) {
+  background-color: #233B58 !important;
+}
+
+/* Borders & Dividers in Dark Mode */
+html.dark .border-slate-100,
+html.dark .border-slate-200,
+html.dark .border-slate-300,
+html.dark [class*="border-slate-100"],
+html.dark [class*="border-slate-200"] {
+  border-color: #223A57 !important;
+}
+
+html.dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]),
+html.dark .divide-slate-200 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #223A57 !important;
+}
+
+/* Text Hierarchy in Dark Mode - Fix "warna font menyatu / nyaru" */
+html.dark .text-slate-900,
+html.dark .text-slate-800,
+html.dark .text-\[\#0F172A\],
+html.dark .text-\[\#172B3A\] {
+  color: #FFFFFF !important;
+}
+
+html.dark .text-slate-700,
+html.dark .text-slate-600 {
+  color: #F8FAFC !important;
+}
+
+html.dark .text-slate-500,
+html.dark .text-slate-400,
+html.dark .text-\[\#64748B\],
+html.dark .text-\[\#94A3B8\] {
+  color: #E2E8F0 !important;
+}
+
+html.dark .text-slate-300,
+html.dark .text-slate-200 {
+  color: #FFFFFF !important;
+}
+
+/* Interactive Hover States in Dark Mode */
+html.dark .hover\:text-\[\#172B3A\]:hover,
+html.dark .hover\:text-slate-900:hover,
+html.dark .hover\:text-slate-800:hover {
+  color: #FFFFFF !important;
+}
+
+html.dark .hover\:bg-slate-100:hover,
+html.dark .hover\:bg-slate-50:hover {
+  background-color: rgba(34, 58, 87, 0.7) !important;
+}
+
+/* Form Controls in Dark Mode */
+html.dark input:not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]):not([type="hidden"]),
+html.dark select,
+html.dark textarea {
+  background-color: #111E30 !important;
+  color: #FFFFFF !important;
+  border-color: #27456B !important;
+}
+
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: #94A3B8 !important;
+}
+
+html.dark select option {
+  background-color: #0F1D2F !important;
+  color: #FFFFFF !important;
+}
+
+/* Table Enhancements in Dark Mode */
+html.dark table thead th {
+  background-color: #0E1B2C !important;
+  color: #FFFFFF !important; /* Pure White on dark table headers for crisp contrast */
+  font-weight: 700 !important;
+  border-bottom: 2px solid #233B58 !important;
+  letter-spacing: 0.025em;
+}
+
+html.dark table tbody td {
+  color: #E2E8F0 !important;
+}
+
+html.dark table tbody td strong,
+html.dark table tbody td .font-semibold,
+html.dark table tbody td .font-bold {
+  color: #FFFFFF !important;
+}
+
+html.dark table tbody tr {
+  border-color: #1A2F49 !important;
+}
+
+html.dark table tbody tr:hover {
+  background-color: rgba(34, 58, 87, 0.45) !important;
+}
+
+/* Semantic Badges & Stat Tints in Dark Mode - High Contrast & Crisp */
+html.dark .bg-emerald-50,
+html.dark [class*="bg-emerald-50"],
+html.dark .bg-emerald-100,
+html.dark [class*="bg-emerald-100"],
+html.dark .bg-emerald-500\/10 {
+  background-color: rgba(16, 185, 129, 0.22) !important;
+}
+html.dark .border-emerald-200,
+html.dark [class*="border-emerald-200"],
+html.dark .border-emerald-500\/20 {
+  border-color: rgba(52, 211, 153, 0.6) !important;
+}
+html.dark .text-emerald-700,
+html.dark .text-emerald-800,
+html.dark .text-emerald-900,
+html.dark .text-emerald-600 {
+  color: #34D399 !important;
+}
+
+html.dark .bg-amber-50,
+html.dark [class*="bg-amber-50"],
+html.dark .bg-amber-100,
+html.dark [class*="bg-amber-100"],
+html.dark .bg-amber-500\/10 {
+  background-color: rgba(245, 158, 11, 0.22) !important;
+}
+html.dark .border-amber-200,
+html.dark [class*="border-amber-200"],
+html.dark .border-amber-500\/20 {
+  border-color: rgba(251, 191, 36, 0.6) !important;
+}
+html.dark .text-amber-700,
+html.dark .text-amber-800,
+html.dark .text-amber-900,
+html.dark .text-amber-600 {
+  color: #FBBF24 !important;
+}
+
+html.dark .bg-blue-50,
+html.dark [class*="bg-blue-50"],
+html.dark .bg-blue-100,
+html.dark [class*="bg-blue-100"],
+html.dark .bg-sky-50,
+html.dark [class*="bg-sky-50"],
+html.dark .bg-sky-100,
+html.dark [class*="bg-sky-100"],
+html.dark .bg-blue-500\/10,
+html.dark .bg-sky-500\/10 {
+  background-color: rgba(56, 134, 184, 0.25) !important;
+}
+html.dark .border-blue-200,
+html.dark [class*="border-blue-200"],
+html.dark .border-sky-200,
+html.dark [class*="border-sky-200"],
+html.dark .border-blue-500\/20,
+html.dark .border-sky-500\/20 {
+  border-color: rgba(140, 204, 240, 0.6) !important;
+}
+/* In dark mode, ensure text on dark blue surfaces is crisp white and does not blend into background */
+html.dark .text-blue-700,
+html.dark .text-blue-800,
+html.dark .text-blue-900,
+html.dark .text-blue-600,
+html.dark .text-sky-700,
+html.dark .text-sky-800,
+html.dark .text-sky-900,
+html.dark .text-sky-600 {
+  color: #FFFFFF !important;
+}
+
+/* Ensure arbitrary light blue on dark navy classes show up with pure white contrast */
+html.dark .text-\[\#8CCCF0\] {
+  color: #FFFFFF !important;
+}
+html.dark .text-\[\#3886B8\] {
+  color: #FFFFFF !important;
+}
+html.dark .text-\[\#163653\] {
+  color: #FFFFFF !important;
+}
+
+html.dark .bg-purple-50,
+html.dark [class*="bg-purple-50"],
+html.dark .bg-purple-100,
+html.dark [class*="bg-purple-100"] {
+  background-color: rgba(88, 28, 135, 0.25) !important;
+}
+html.dark .border-purple-200,
+html.dark [class*="border-purple-200"] {
+  border-color: rgba(168, 85, 247, 0.45) !important;
+}
+html.dark .text-purple-700,
+html.dark .text-purple-800,
+html.dark .text-purple-900 {
+  color: #C084FC !important;
+}
+
+html.dark .bg-teal-50,
+html.dark [class*="bg-teal-50"],
+html.dark .bg-teal-100,
+html.dark [class*="bg-teal-100"] {
+  background-color: rgba(19, 78, 74, 0.25) !important;
+}
+html.dark .border-teal-200,
+html.dark [class*="border-teal-200"] {
+  border-color: rgba(20, 184, 166, 0.45) !important;
+}
+html.dark .text-teal-700,
+html.dark .text-teal-800,
+html.dark .text-teal-900 {
+  color: #2DD4BF !important;
+}
+
+html.dark .bg-rose-50,
+html.dark [class*="bg-rose-50"],
+html.dark .bg-rose-100,
+html.dark [class*="bg-rose-100"],
+html.dark .bg-red-50,
+html.dark [class*="bg-red-50"],
+html.dark .bg-red-100,
+html.dark [class*="bg-red-100"] {
+  background-color: rgba(136, 19, 55, 0.25) !important;
+}
+html.dark .border-rose-200,
+html.dark [class*="border-rose-200"],
+html.dark .border-red-200,
+html.dark [class*="border-red-200"] {
+  border-color: rgba(244, 63, 94, 0.45) !important;
+}
+html.dark .text-rose-700,
+html.dark .text-rose-800,
+html.dark .text-rose-900,
+html.dark .text-red-700,
+html.dark .text-red-800,
+html.dark .text-red-900 {
+  color: #FB7185 !important;
+}
+
+/* Dark Mode Scrollbars */
+html.dark ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+html.dark ::-webkit-scrollbar-track {
+  background: #0A121E;
+}
+html.dark ::-webkit-scrollbar-thumb {
+  background: #233B58;
+  border-radius: 4px;
+}
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: #3886B8;
+}
+
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  .print-break {
+    page-break-after: always;
+  }
+}

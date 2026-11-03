@@ -1,0 +1,32 @@
+{
+  "name": "Finish Pallet Management System",
+  "short_name": "FPMS Pallet",
+  "description": "Sistem monitoring stok, penerimaan, pengeluaran, dan aktivitas area Finish Pallet pabrik.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#064e3b",
+  "lang": "id",
+  "scope": "/",
+  "id": "/",
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

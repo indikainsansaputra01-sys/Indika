@@ -1,0 +1,156 @@
+{
+  "entities": {
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Catatan transaksi penerimaan atau pengeluaran pallet di area Finish Pallet.",
+      "type": "object",
+      "properties": {
+        "transactionNumber": { "type": "string", "maxLength": 64 },
+        "transactionType": { "type": "string", "enum": ["PENERIMAAN", "PENGELUARAN"] },
+        "date": { "type": "string", "maxLength": 32 },
+        "time": { "type": "string", "maxLength": 16 },
+        "palletSize": { "type": "string", "maxLength": 64 },
+        "palletType": { "type": "string", "maxLength": 64 },
+        "customer": { "type": "string", "maxLength": 128 },
+        "shift": { "type": "string", "maxLength": 32 },
+        "marketType": { "type": "string", "enum": ["Lokal", "Ekspor"] },
+        "quantity": { "type": "number" },
+        "unit": { "type": "string", "enum": ["Set", "Pcs"] },
+        "pelatakanPallet": { "type": "string", "maxLength": 128 },
+        "noRun": { "type": "string", "maxLength": 64 },
+        "typePallet": { "type": "string", "maxLength": 16 },
+        "operator": { "type": "string", "maxLength": 64 },
+        "operatorId": { "type": "string", "maxLength": 64 },
+        "notes": { "type": "string", "maxLength": 500 },
+        "createdBy": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "lastModifiedBy": { "type": "string", "maxLength": 64 },
+        "lastModifiedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["transactionNumber", "transactionType", "date", "time", "palletSize", "palletType", "customer", "shift", "marketType", "quantity", "unit", "operator"]
+    },
+    "StockItem": {
+      "title": "StockItem",
+      "description": "Data agregasi stok pallet aktif berdasarkan ukuran, jenis, tujuan pasar, dan satuan.",
+      "type": "object",
+      "properties": {
+        "palletSize": { "type": "string", "maxLength": 64 },
+        "palletType": { "type": "string", "maxLength": 64 },
+        "marketType": { "type": "string", "enum": ["Lokal", "Ekspor"] },
+        "unit": { "type": "string", "enum": ["Set", "Pcs"] },
+        "quantity": { "type": "number" },
+        "lastUpdated": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["palletSize", "palletType", "marketType", "unit", "quantity"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Catatan jejak audit aktivitas sistem untuk pengawasan supervisor.",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "maxLength": 32 },
+        "time": { "type": "string", "maxLength": 16 },
+        "userName": { "type": "string", "maxLength": 64 },
+        "employeeId": { "type": "string", "maxLength": 64 },
+        "activity": { "type": "string", "maxLength": 128 },
+        "dataBefore": { "type": "string", "maxLength": 500 },
+        "dataAfter": { "type": "string", "maxLength": 500 }
+      },
+      "required": ["date", "time", "userName", "activity"]
+    },
+    "MasterPalletSize": {
+      "title": "MasterPalletSize",
+      "description": "Ukuran pallet master.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 64 },
+        "description": { "type": "string", "maxLength": 200 },
+        "active": { "type": "boolean" }
+      },
+      "required": ["name", "active"]
+    },
+    "MasterPalletType": {
+      "title": "MasterPalletType",
+      "description": "Jenis pallet master.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 64 },
+        "active": { "type": "boolean" }
+      },
+      "required": ["name", "active"]
+    },
+    "MasterCustomer": {
+      "title": "MasterCustomer",
+      "description": "User / Customer tujuan pallet.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 64 },
+        "active": { "type": "boolean" }
+      },
+      "required": ["name", "active"]
+    },
+    "Employee": {
+      "title": "Employee",
+      "description": "Master data personil, hak akses, peran, dan kredensial kata sandi akun.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 32 },
+        "name": { "type": "string", "maxLength": 64 },
+        "role": { "type": "string", "enum": ["operator", "officer", "leadershift", "spv", "admin"] },
+        "isAdmin": { "type": "boolean" },
+        "title": { "type": "string", "maxLength": 64 },
+        "active": { "type": "boolean" },
+        "shiftPreference": { "type": "string", "maxLength": 32 },
+        "password": { "type": "string", "maxLength": 64 },
+        "lastPasswordChangedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "name", "role", "title", "active"]
+    },
+    "SystemConfig": {
+      "title": "SystemConfig",
+      "description": "Konfigurasi ambang batas stok pabrik.",
+      "type": "object",
+      "properties": {
+        "safeMin": { "type": "number" },
+        "warningMin": { "type": "number" },
+        "criticalMax": { "type": "number" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["safeMin", "warningMin", "criticalMax"]
+    }
+  },
+  "firestore": {
+    "/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Koleksi seluruh transaksi penerimaan dan pengeluaran pallet."
+    },
+    "/stocks/{stockId}": {
+      "schema": "StockItem",
+      "description": "Koleksi saldo stok pallet real-time."
+    },
+    "/auditLogs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Koleksi log audit aktivitas sistem."
+    },
+    "/masterSizes/{sizeId}": {
+      "schema": "MasterPalletSize",
+      "description": "Koleksi master data ukuran pallet."
+    },
+    "/masterTypes/{typeId}": {
+      "schema": "MasterPalletType",
+      "description": "Koleksi master jenis pallet."
+    },
+    "/masterCustomers/{customerId}": {
+      "schema": "MasterCustomer",
+      "description": "Koleksi master user/customer."
+    },
+    "/employees/{employeeId}": {
+      "schema": "Employee",
+      "description": "Koleksi data karyawan, hak akses, dan sandi akun terdaftar."
+    },
+    "/systemConfig/{configId}": {
+      "schema": "SystemConfig",
+      "description": "Dokumen konfigurasi sistem."
+    }
+  }
+}
