@@ -4,12 +4,14 @@ import path from 'path';
 import {defineConfig} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
 
-export default defineConfig(() => {
+export default defineConfig(({ command }) => {
+  const isDev = command === 'serve';
   return {
     plugins: [
       react(),
       tailwindcss(),
       VitePWA({
+        disable: isDev,
         registerType: 'autoUpdate',
         includeAssets: [
           'favicon.ico',
@@ -61,7 +63,7 @@ export default defineConfig(() => {
           maximumFileSizeToCacheInBytes: 15000000,
         },
         devOptions: {
-          enabled: true,
+          enabled: false,
         },
       }),
     ],

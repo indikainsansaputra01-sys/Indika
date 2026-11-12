@@ -22,6 +22,7 @@ import { TransactionDetailModal } from './components/common/TransactionDetailMod
 import { ToastContainer } from './components/common/ToastContainer';
 import { OfflineIndicator } from './components/common/OfflineIndicator';
 import { SplashScreen } from './components/common/SplashScreen';
+import { OperationalWarningModal, OperationalWarningType } from './components/common/OperationalWarningModal';
 import { Transaction } from './types';
 
 const VALID_VIEWS = new Set([
@@ -47,7 +48,7 @@ const VALID_VIEWS = new Set([
 const getInitialView = (): string => {
   try {
     const segments = window.location.pathname.replace(/^\/+|\/+$/g, '').split('/');
-    if (segments[0] === 'finishpalletikk' && segments[1] && VALID_VIEWS.has(segments[1])) {
+    if ((segments[0] === 'finishpalletikk' || segments[0] === 'stocktake') && segments[1] && VALID_VIEWS.has(segments[1])) {
       return segments[1];
     }
   } catch {}
@@ -55,48 +56,86 @@ const getInitialView = (): string => {
 };
 
 const AppContent: React.FC = () => {
-  const { currentUser } = useApp();
+  const { currentUser, appEnvironment, setAppEnvironment, showNotification } = useApp();
   const [showSplash, setShowSplash] = useState<boolean>(true);
   const [currentView, setCurrentView] = useState<string>(getInitialView);
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
   const [historyFilter, setHistoryFilter] = useState<{ size?: string; type?: string; noRun?: string; txType?: RiwayatMode } | undefined>(undefined);
+  const [operationalWarning, setOperationalWarning] = useState<OperationalWarningType | null>(null);
 
-  // Synchronize URL pathname so it always features /finishpalletikk
+  // Synchronize URL pathname with active environment: /finishpalletikk or /stocktake
   useEffect(() => {
     try {
-      const targetPath = '/finishpalletikk' + (currentView !== 'dashboard' ? `/${currentView}` : '');
+      const basePath = appEnvironment === 'stocktake' ? '/stocktake' : '/finishpalletikk';
+      const targetPath = basePath + (currentView !== 'dashboard' ? `/${currentView}` : '');
       if (window.location.pathname !== targetPath) {
-        window.history.replaceState({ view: currentView }, '', targetPath + (window.location.search || '') + (window.location.hash || ''));
+        window.history.replaceState({ view: currentView, env: appEnvironment }, '', targetPath + (window.location.search || '') + (window.location.hash || ''));
       }
     } catch {}
-  }, [currentView]);
+  }, [currentView, appEnvironment]);
 
   useEffect(() => {
     const handlePopState = () => {
       try {
         const segments = window.location.pathname.replace(/^\/+|\/+$/g, '').split('/');
-        if (segments[0] === 'finishpalletikk' && segments[1] && VALID_VIEWS.has(segments[1])) {
+        const base = segments[0];
+        if (base === 'stocktake' && appEnvironment !== 'stocktake') {
+          setAppEnvironment('stocktake');
+        } else if (base === 'finishpalletikk' && appEnvironment !== 'operasional') {
+          setAppEnvironment('operasional');
+        }
+
+        if ((base === 'finishpalletikk' || base === 'stocktake') && segments[1] && VALID_VIEWS.has(segments[1])) {
           setCurrentView(segments[1]);
-        } else if (segments[0] === 'finishpalletikk' || segments[0] === '') {
+        } else if (base === 'finishpalletikk' || base === 'stocktake' || base === '') {
           setCurrentView('dashboard');
         }
       } catch {}
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
+  }, [appEnvironment]);
 
-  const handleNavigate = (view: string) => {
+  const executeNavigate = (view: string) => {
     const isTargetRiwayat = view === 'riwayat' || view === 'riwayat-masuk' || view === 'riwayat-keluar';
     if (!isTargetRiwayat) {
       setHistoryFilter(undefined);
     }
     setCurrentView(view);
     try {
-      const targetPath = '/finishpalletikk' + (view !== 'dashboard' ? `/${view}` : '');
-      window.history.pushState({ view }, '', targetPath);
+      const basePath = appEnvironment === 'stocktake' ? '/stocktake' : '/finishpalletikk';
+      const targetPath = basePath + (view !== 'dashboard' ? `/${view}` : '');
+      window.history.pushState({ view, env: appEnvironment }, '', targetPath);
     } catch {}
+  };
+
+  const handleNavigate = (view: string) => {
+    // Jika user memilih penerimaan dan belum di halaman penerimaan -> tampilkan notifikasi konfirmasi terlebih dahulu
+    if (view === 'penerimaan' && currentView !== 'penerimaan') {
+      setOperationalWarning('penerimaan');
+      return;
+    }
+
+    // Jika user memilih pengeluaran dan belum di halaman pengeluaran -> tampilkan notifikasi konfirmasi terlebih dahulu
+    if (view === 'pengeluaran' && currentView !== 'pengeluaran') {
+      setOperationalWarning('pengeluaran');
+      return;
+    }
+
+    executeNavigate(view);
+  };
+
+  const handleConfirmOperationalWarning = () => {
+    if (operationalWarning) {
+      const target = operationalWarning;
+      setOperationalWarning(null);
+      executeNavigate(target);
+    }
+  };
+
+  const handleCancelOperationalWarning = () => {
+    setOperationalWarning(null);
   };
 
   // Splash Screen Intro on initial opening
@@ -224,6 +263,14 @@ const AppContent: React.FC = () => {
           </div>
         </main>
       </div>
+
+      {/* Modal Notifikasi Konfirmasi Operasional (Penerimaan / Pengeluaran) */}
+      <OperationalWarningModal
+        isOpen={operationalWarning !== null}
+        type={operationalWarning}
+        onConfirm={handleConfirmOperationalWarning}
+        onCancel={handleCancelOperationalWarning}
+      />
 
       {/* Global Transaction Modal */}
       <TransactionDetailModal

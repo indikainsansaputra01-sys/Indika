@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
-import { LogOut, Clock, ChevronDown, Shield, Key, Sun, Moon, Link as LinkIcon, Check, Wifi, WifiOff, Menu, ChevronRight } from 'lucide-react';
+import { LogOut, Clock, ChevronDown, Shield, Key, Sun, Moon, Link as LinkIcon, Check, Wifi, WifiOff, Menu, ChevronRight, RefreshCw } from 'lucide-react';
 import { ShiftType } from '../../types';
 import { PWAInstallButton } from '../common/PWAInstallButton';
 import { EmployeeAvatar } from '../common/EmployeeAvatar';
@@ -32,10 +32,43 @@ const VIEW_TITLES: Record<string, { title: string; category: string }> = {
 };
 
 export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, onOpenMobileMenu }) => {
-  const { currentUser, logout, activeShift, setActiveShift, isOperator, isAdmin, theme, setTheme, showNotification } = useApp();
+  const {
+    currentUser,
+    logout,
+    activeShift,
+    setActiveShift,
+    isOperator,
+    isAdmin,
+    theme,
+    setTheme,
+    showNotification,
+    appEnvironment,
+    setAppEnvironment
+  } = useApp();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
   const [isOnline, setIsOnline] = useState<boolean>(() => (typeof navigator !== 'undefined' ? navigator.onLine : true));
+
+  const handleForceUpdateApp = async () => {
+    setIsUpdating(true);
+    showNotification('info', 'Memperbarui Aplikasi...', 'Membersihkan cache browser & memuat fitur terbaru...');
+    try {
+      if ('caches' in window) {
+        const cacheKeys = await caches.keys();
+        await Promise.all(cacheKeys.map((key) => caches.delete(key)));
+      }
+      if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(registrations.map((r) => r.unregister()));
+      }
+    } catch (e) {
+      console.warn('Cache clearing error:', e);
+    }
+    setTimeout(() => {
+      window.location.href = window.location.origin + window.location.pathname + '?t=' + Date.now();
+    }, 600);
+  };
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -52,13 +85,13 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, onOpenM
 
   const handleCopyLink = () => {
     try {
-      const url = `${window.location.origin}/finishpalletikk`;
+      const url = window.location.origin;
       navigator.clipboard.writeText(url);
       setCopiedLink(true);
       showNotification('success', 'Tautan Web Disalin', `${url} berhasil disalin ke clipboard.`);
       setTimeout(() => setCopiedLink(false), 2500);
     } catch {
-      showNotification('info', 'Tautan Web Finish Pallet IKK', `${window.location.origin}/finishpalletikk`);
+      showNotification('info', 'Tautan Web', window.location.origin);
     }
   };
 
@@ -126,12 +159,24 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, onOpenM
       {/* Zone 3: Profile Menu & User Info */}
       <div className="flex items-center gap-2 shrink-0">
         <button
+          onClick={handleForceUpdateApp}
+          disabled={isUpdating}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900 border border-emerald-300 dark:border-emerald-700 rounded-lg transition-all cursor-pointer active:scale-95 shadow-2xs"
+          title="Perbarui aplikasi ke versi terbaru & bersihkan cache browser"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 ${isUpdating ? 'animate-spin' : ''}`} />
+          <span className="hidden sm:inline font-bold">{isUpdating ? 'Memuat...' : 'Perbarui Fitur'}</span>
+        </button>
+
+        <button
           onClick={handleCopyLink}
-          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold text-[#3886B8] dark:text-white hover:bg-slate-100 dark:hover:bg-[#163653] border border-[#CBD5E1] dark:border-[#1E3A52] rounded-lg transition-colors cursor-pointer"
-          title="Salin tautan web /finishpalletikk"
+          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold rounded-lg transition-colors cursor-pointer border text-[#3886B8] dark:text-white hover:bg-slate-100 dark:hover:bg-[#163653] border-[#CBD5E1] dark:border-[#1E3A52]"
+          title="Salin tautan website"
         >
           {copiedLink ? <Check className="w-3.5 h-3.5 text-[#16805D]" /> : <LinkIcon className="w-3.5 h-3.5" />}
-          <span className="text-[11px] font-bold">{copiedLink ? 'Tersalin' : 'Tautan'}</span>
+          <span className="text-[11px] font-bold">
+            {copiedLink ? 'Tersalin' : 'Salin Link Web'}
+          </span>
         </button>
 
         {currentUser ? (
@@ -239,14 +284,52 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, onOpenM
                   <PWAInstallButton variant="menu" />
 
                   <button
-                    onClick={handleCopyLink}
-                    className="w-full flex items-center justify-between text-xs text-[#3886B8] hover:bg-[#8CCCF0]/10 px-3 py-2 rounded-lg transition-colors cursor-pointer font-medium"
+                    onClick={handleForceUpdateApp}
+                    disabled={isUpdating}
+                    className="w-full flex items-center justify-between text-xs text-emerald-800 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 px-3 py-2 rounded-lg transition-colors cursor-pointer font-bold"
+                    title="Bersihkan cache browser dan muat versi aplikasi paling mutakhir"
                   >
                     <div className="flex items-center gap-2">
-                      {copiedLink ? <Check className="w-4 h-4 text-[#16805D] shrink-0" /> : <LinkIcon className="w-4 h-4 text-[#3886B8] shrink-0" />}
-                      <span>{copiedLink ? 'Tautan Berhasil Disalin!' : 'Salin Tautan /finishpalletikk'}</span>
+                      <RefreshCw className={`w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 ${isUpdating ? 'animate-spin' : ''}`} />
+                      <span>{isUpdating ? 'Memuat Ulang...' : 'Perbarui Fitur & Bersihkan Cache'}</span>
                     </div>
-                    <span className="text-[10px] font-mono text-[#64748B]">Web</span>
+                    <span className="text-[10px] font-mono bg-emerald-100 dark:bg-emerald-900/60 px-1.5 py-0.2 rounded text-emerald-800 dark:text-emerald-200">
+                      Sync
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      try {
+                        const url = `${window.location.origin}/finishpalletikk`;
+                        navigator.clipboard.writeText(url);
+                        showNotification('success', 'Link Operasional Disalin', `${url} telah disalin.`);
+                      } catch {}
+                    }}
+                    className="w-full flex items-center justify-between text-xs text-emerald-800 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 px-3 py-2 rounded-lg transition-colors cursor-pointer font-medium"
+                  >
+                    <div className="flex items-center gap-2">
+                      <LinkIcon className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>Salin Link Operasional (/finishpalletikk)</span>
+                    </div>
+                    <span className="text-[10px] font-mono text-emerald-600 bg-emerald-100 dark:bg-emerald-900/60 px-1.5 py-0.2 rounded font-bold">Lama</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      try {
+                        const url = `${window.location.origin}/stocktake`;
+                        navigator.clipboard.writeText(url);
+                        showNotification('success', 'Link Stok Take Disalin', `${url} telah disalin.`);
+                      } catch {}
+                    }}
+                    className="w-full flex items-center justify-between text-xs text-sky-800 dark:text-sky-300 hover:bg-sky-50 dark:hover:bg-sky-950/40 px-3 py-2 rounded-lg transition-colors cursor-pointer font-medium"
+                  >
+                    <div className="flex items-center gap-2">
+                      <LinkIcon className="w-4 h-4 text-sky-600 shrink-0" />
+                      <span>Salin Link Stok Take (/stocktake)</span>
+                    </div>
+                    <span className="text-[10px] font-mono text-sky-600 bg-sky-100 dark:bg-sky-900/60 px-1.5 py-0.2 rounded font-bold">Baru</span>
                   </button>
 
                   {onNavigate && (

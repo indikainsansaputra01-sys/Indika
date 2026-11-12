@@ -16,14 +16,16 @@ import {
   Share2,
   Sparkles,
   Shield,
-  Lock
+  Lock,
+  Printer
 } from 'lucide-react';
-import { ShiftType, MarketType, QuantityUnit, PalletSideType } from '../../types';
+import { ShiftType, MarketType, QuantityUnit, PalletSideType, Transaction } from '../../types';
 import {
   generateWhatsAppPenerimaanText,
   copyTextToClipboard
 } from '../../utils/whatsappReportUtils';
 import { SalinLaporanWAModal } from '../common/SalinLaporanWAModal';
+import { NotaPenerimaanModal } from './NotaPenerimaanModal';
 import { normalizePalletDimension } from '../../utils/dimensionUtils';
 import { formatIndoDate } from '../../utils/shiftReportUtils';
 import { getOperatorShiftForDate } from '../../utils/rosterUtils';
@@ -38,6 +40,7 @@ export const PenerimaanPallet: React.FC = () => {
     masterCustomers,
     isOperator,
     transactions,
+    employees,
     showNotification
   } = useApp();
 
@@ -81,6 +84,10 @@ export const PenerimaanPallet: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showWAModal, setShowWAModal] = useState(false);
   const [quickCopied, setQuickCopied] = useState(false);
+
+  // Modal Nota Good Received / Nota Penerimaan Produksi (NGR)
+  const [showNgrModal, setShowNgrModal] = useState(false);
+  const [lastSubmittedTx, setLastSubmittedTx] = useState<Transaction | null>(null);
 
   // Modal Konfirmasi Satuan Pallet Khusus (Mencegah salah input PCS vs SET)
   const [unitConfirmModal, setUnitConfirmModal] = useState<{
@@ -259,6 +266,9 @@ export const PenerimaanPallet: React.FC = () => {
       });
 
       if (res.success) {
+        if (res.createdTx) {
+          setLastSubmittedTx(res.createdTx);
+        }
         setStatusMessage({
           type: 'success',
           text: `Penerimaan pallet berhasil disimpan ke cloud. Sisa stok ${cleanSize} (${typePallet} - ${palletType} - ${marketType} - ${finalUnit}) saat ini: ${res.currentStock} ${finalUnit}.`
@@ -371,6 +381,19 @@ export const PenerimaanPallet: React.FC = () => {
         <div className="flex items-center gap-2">
           <button
             type="button"
+            onClick={() => {
+              const latest = lastSubmittedTx || transactions.find(t => t.transactionType === 'PENERIMAAN') || null;
+              setLastSubmittedTx(latest);
+              setShowNgrModal(true);
+            }}
+            className="px-3.5 py-1.5 bg-teal-700 hover:bg-teal-600 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer active:scale-95"
+            title="Cetak Nota Good Received / Penerimaan Produksi Pallet & Coreplug"
+          >
+            <Printer className="w-3.5 h-3.5" />
+            <span>Nota Penerimaan (NGR)</span>
+          </button>
+          <button
+            type="button"
             onClick={() => setShowWAModal(true)}
             className="px-3.5 py-1.5 bg-[#16805D] hover:bg-[#136B4E] text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer active:scale-95"
             title="Buka & Salin Format Laporan WhatsApp Hasil Produksi"
@@ -381,6 +404,21 @@ export const PenerimaanPallet: React.FC = () => {
           <span className="text-xs font-mono bg-[#112B43] text-[#8CCCF0] border border-[#1E4366] px-2.5 py-1 rounded hidden sm:inline-block font-semibold">
             INCOMING
           </span>
+        </div>
+      </div>
+
+      {/* Peringatan Wajib Operasional Anti-Salah Input */}
+      <div className="p-3.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-700 rounded-xl text-xs text-emerald-950 dark:text-emerald-100 flex items-start gap-3 shadow-2xs">
+        <div className="w-7 h-7 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 mt-0.5">
+          <AlertTriangle className="w-4 h-4" />
+        </div>
+        <div className="min-w-0">
+          <div className="text-[10px] font-black uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+            Peringatan Operasional Penerimaan Produksi:
+          </div>
+          <div className="font-extrabold text-xs sm:text-sm mt-0.5 leading-snug">
+            "Pastikan Penginputan Pallet Hasil Produksi Sudah Benar Dari Ukuran, Spesifikasi, & Tanggal Penerimaannya"
+          </div>
         </div>
       </div>
 
@@ -417,9 +455,18 @@ export const PenerimaanPallet: React.FC = () => {
             </div>
           </div>
 
-          {/* Quick WA Copy Button directly inside success notification */}
+          {/* Quick WA Copy Button & Nota Penerimaan directly inside success notification */}
           {statusMessage.type === 'success' && (
             <div className="mt-1 pt-2.5 border-t border-emerald-200/80 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowNgrModal(true)}
+                className="px-3 py-1.5 bg-teal-700 hover:bg-teal-800 text-white rounded text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-95"
+                title="Cetak Nota Good Received / Nota Penerimaan Produksi"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Cetak Nota Penerimaan (NGR)</span>
+              </button>
               <button
                 type="button"
                 onClick={handleQuickCopyWA}
@@ -1049,6 +1096,16 @@ export const PenerimaanPallet: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Modal Nota Penerimaan Produksi Pallet & Coreplug (Form GR-1 A4 2-Rangkap) */}
+      <NotaPenerimaanModal
+        isOpen={showNgrModal}
+        onClose={() => setShowNgrModal(false)}
+        transaction={lastSubmittedTx}
+        allTransactions={transactions}
+        employees={employees}
+        currentUser={currentUser}
+      />
     </div>
   );
 };

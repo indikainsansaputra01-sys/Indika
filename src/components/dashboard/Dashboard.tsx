@@ -322,7 +322,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onSelectTransa
 
           <div>
             <h1 className="text-lg sm:text-2xl font-extrabold tracking-tight text-white font-sans leading-tight">
-              Finish Pallet Management System
+              Finished Goods Pallet Management System
             </h1>
           </div>
 
@@ -337,10 +337,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onSelectTransa
             </span>
           </div>
 
-          {/* Petugas Jaga : (Sesuai Jadwal Shift Rotasi Resmi) */}
+          {/* Operator Finish Pallet : (Sesuai Jadwal Shift Rotasi Resmi) */}
           <div className="flex flex-wrap items-center gap-2 text-xs bg-[#112B43] px-3.5 py-2 rounded-lg border border-[#1E4366]">
             <div className="flex items-center gap-1.5">
-              <span className="text-white font-bold">Petugas Jaga :</span>
+              <span className="text-white font-bold">Operator Finish Pallet :</span>
               <span className="font-extrabold text-white tracking-wide text-[13.5px]">
                 {dutyOperator?.name || currentUser?.name || 'Harun'}
               </span>
@@ -420,7 +420,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onSelectTransa
           <div className="text-2xl font-bold font-mono text-[#0F172A] dark:text-white mt-1 tabular-nums">
             {stats.totalStock.toLocaleString()}
           </div>
-          <div className="text-[11px] text-slate-600 dark:text-slate-300 font-semibold mt-0.5">Pallet Di Lapangan</div>
+          <div className="text-[11px] text-slate-600 dark:text-slate-300 font-semibold mt-0.5">Total Persediaan Pallet</div>
         </div>
 
         {/* 2. Penerimaan Hari Ini (Pemasukan) -> SUCCESS GREEN */}
@@ -456,7 +456,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onSelectTransa
           <div className="text-2xl font-bold font-mono text-[#0F172A] dark:text-white mt-1 tabular-nums">
             {stats.stokLokal.toLocaleString()}
           </div>
-          <div className="text-[11px] text-slate-600 dark:text-slate-300 font-semibold mt-0.5">Area Domestik</div>
+          <div className="text-[11px] text-slate-600 dark:text-slate-300 font-semibold mt-0.5">Persediaan Pallet Lokal</div>
         </div>
 
         {/* 5. Stok Ekspor -> DEEP NAVY */}
@@ -468,7 +468,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onSelectTransa
           <div className="text-2xl font-bold font-mono text-[#0F172A] dark:text-white mt-1 tabular-nums">
             {stats.stokEkspor.toLocaleString()}
           </div>
-          <div className="text-[11px] text-slate-600 dark:text-slate-300 font-semibold mt-0.5">Pasar Ekspor</div>
+          <div className="text-[11px] text-slate-600 dark:text-slate-300 font-semibold mt-0.5">Persediaan Pallet Ekspor</div>
         </div>
 
         {/* 6. Stok Racuk -> SKY ACCENT */}
@@ -480,7 +480,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onSelectTransa
           <div className="text-2xl font-bold font-mono text-[#0F172A] dark:text-white mt-1 tabular-nums">
             {stats.stokRacuk.toLocaleString()}
           </div>
-          <div className="text-[11px] text-slate-600 dark:text-slate-300 font-semibold mt-0.5">Pallet Racukan</div>
+          <div className="text-[11px] text-slate-600 dark:text-slate-300 font-semibold mt-0.5">Persediaan Pallet Racuk</div>
         </div>
 
         {/* 7. Transaksi Hari Ini */}

@@ -33,6 +33,7 @@ import { CetakLaporanShiftModal } from './CetakLaporanShiftModal';
 import { SalinLaporanWAModal } from '../common/SalinLaporanWAModal';
 import { TransactionRevisionModal } from '../common/TransactionRevisionModal';
 import { NotaPengirimanModal } from '../operations/NotaPengirimanModal';
+import { NotaPenerimaanModal } from '../operations/NotaPenerimaanModal';
 import { Transaction, ShiftType } from '../../types';
 import {
   normalizePalletDimension,
@@ -94,6 +95,10 @@ export const RiwayatTransaksi: React.FC<RiwayatTransaksiProps> = ({
   // Nota Pengiriman Modal State
   const [showNotaModal, setShowNotaModal] = useState(false);
   const [txForNota, setTxForNota] = useState<Transaction | null>(null);
+
+  // Nota Good Received / Penerimaan Modal State
+  const [showNgrModal, setShowNgrModal] = useState(false);
+  const [txForNgr, setTxForNgr] = useState<Transaction | null>(null);
 
   // Dedicated Shift Report Modal State
   const [showShiftModal, setShowShiftModal] = useState(false);
@@ -476,6 +481,37 @@ export const RiwayatTransaksi: React.FC<RiwayatTransaksiProps> = ({
   }, [activeMode]);
 
   const reportPayload = useMemo(() => {
+    const getShiftRank = (shift?: string): number => {
+      if (shift === 'Shift 1') return 1;
+      if (shift === 'Shift 2') return 2;
+      if (shift === 'Shift 3') return 3;
+      return 4;
+    };
+
+    const getTxTypeRank = (txType?: string): number => {
+      if (txType === 'PENERIMAAN') return 1;
+      if (txType === 'PENGELUARAN') return 2;
+      return 3;
+    };
+
+    // Strict sequential ordering requested:
+    // 1. Grouped by Date ascending
+    // 2. Ordered Shift 1 -> Shift 2 -> Shift 3
+    // 3. Within same Shift: Penerimaan first, then Pengeluaran
+    // 4. Secondary: Time / Transaction number
+    const sortedForReport = [...filteredTransactions].sort((a, b) => {
+      const dateCmp = a.date.localeCompare(b.date);
+      if (dateCmp !== 0) return dateCmp;
+
+      const shiftCmp = getShiftRank(a.shift) - getShiftRank(b.shift);
+      if (shiftCmp !== 0) return shiftCmp;
+
+      const typeCmp = getTxTypeRank(a.transactionType) - getTxTypeRank(b.transactionType);
+      if (typeCmp !== 0) return typeCmp;
+
+      return (a.time || '').localeCompare(b.time || '') || (a.transactionNumber || '').localeCompare(b.transactionNumber || '');
+    });
+
     const headers = [
       'No',
       'No. Transaksi',
@@ -488,14 +524,13 @@ export const RiwayatTransaksi: React.FC<RiwayatTransaksiProps> = ({
       'Type Pallet',
       'User / Customer',
       'No.Run',
-      'Pelatakan',
       'Shift',
       'Quantity',
       'Satuan',
       'Operator',
       'Catatan'
     ];
-    const rows = filteredTransactions.map((t, idx) => [
+    const rows = sortedForReport.map((t, idx) => [
       idx + 1,
       t.transactionNumber,
       t.date,
@@ -507,22 +542,21 @@ export const RiwayatTransaksi: React.FC<RiwayatTransaksiProps> = ({
       t.typePallet || 'LS',
       t.customer,
       t.noRun || '-',
-      t.pelatakanPallet || '-',
       t.shift,
       t.quantity,
       t.unit,
       t.operator,
       t.notes || ''
     ]);
-    const totalQty = filteredTransactions.reduce((acc, t) => acc + t.quantity, 0);
+    const totalQty = sortedForReport.reduce((acc, t) => acc + t.quantity, 0);
     return {
       headers,
       rows,
       totals: {
         label: `TOTAL ${activeMode === 'PENGELUARAN' ? 'PENGELUARAN' : activeMode === 'PENERIMAAN' ? 'PENERIMAAN' : 'TRANSAKSI'}`,
-        values: { 13: totalQty }
+        values: { 12: totalQty }
       },
-      totalsSummary: `Total Mutasi: ${totalQty} Unit (${filteredTransactions.length} Transaksi Terpilih)`
+      totalsSummary: `Total Mutasi: ${totalQty} Unit (${sortedForReport.length} Transaksi Terpilih)`
     };
   }, [filteredTransactions, activeMode]);
 
@@ -757,6 +791,38 @@ export const RiwayatTransaksi: React.FC<RiwayatTransaksiProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2 no-print self-end sm:self-auto">
+          {/* Opsi Khusus: Cetak Nota Pengiriman Pallet & Coreplug (NPP) */}
+          {(activeMode === 'PENGELUARAN' || activeMode === 'ALL') && (
+            <button
+              onClick={() => {
+                const latestOutTx = filteredTransactions.find(t => t.transactionType === 'PENGELUARAN') || transactions.find(t => t.transactionType === 'PENGELUARAN') || null;
+                setTxForNota(latestOutTx);
+                setShowNotaModal(true);
+              }}
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95"
+              title="Cetak Nota Pengiriman Pallet & Coreplug (Form B-2 A4 2-Rangkap)"
+            >
+              <Printer className="w-3.5 h-3.5 text-white" />
+              <span>Nota Pengiriman (NPP)</span>
+            </button>
+          )}
+
+          {/* Opsi Khusus: Cetak Nota Penerimaan Produksi (NGR) */}
+          {(activeMode === 'PENERIMAAN' || activeMode === 'ALL') && (
+            <button
+              onClick={() => {
+                const latestInTx = filteredTransactions.find(t => t.transactionType === 'PENERIMAAN') || transactions.find(t => t.transactionType === 'PENERIMAAN') || null;
+                setTxForNgr(latestInTx);
+                setShowNgrModal(true);
+              }}
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-teal-700 hover:bg-teal-600 text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95"
+              title="Cetak Nota Good Received / Penerimaan Produksi Pallet & Coreplug (Form GR-1 A4 2-Rangkap)"
+            >
+              <Printer className="w-3.5 h-3.5 text-white" />
+              <span>Nota Penerimaan (NGR)</span>
+            </button>
+          )}
+
           {/* Opsi Khusus: Salin Format WhatsApp */}
           <button
             onClick={() => {
@@ -1873,6 +1939,30 @@ export const RiwayatTransaksi: React.FC<RiwayatTransaksiProps> = ({
                           >
                             <Eye className="w-4 h-4" />
                           </button>
+                          {tx.transactionType === 'PENGELUARAN' && (
+                            <button
+                              onClick={() => {
+                                setTxForNota(tx);
+                                setShowNotaModal(true);
+                              }}
+                              title="Cetak Nota Pengiriman Pallet & Coreplug (NPP)"
+                              className="p-1 text-emerald-600 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 rounded cursor-pointer"
+                            >
+                              <Printer className="w-4 h-4" />
+                            </button>
+                          )}
+                          {tx.transactionType === 'PENERIMAAN' && (
+                            <button
+                              onClick={() => {
+                                setTxForNgr(tx);
+                                setShowNgrModal(true);
+                              }}
+                              title="Cetak Nota Good Received / Penerimaan Produksi Pallet & Coreplug (NGR)"
+                              className="p-1 text-teal-600 dark:text-teal-400 hover:text-teal-800 dark:hover:text-teal-300 hover:bg-teal-50 dark:hover:bg-teal-950/40 rounded cursor-pointer"
+                            >
+                              <Printer className="w-4 h-4" />
+                            </button>
+                          )}
                           {userCanModify && (
                             <button
                               onClick={() => setTxToRevise(tx)}
@@ -2015,6 +2105,32 @@ export const RiwayatTransaksi: React.FC<RiwayatTransaksiProps> = ({
           onClose={() => setTxToRevise(null)}
         />
       )}
+
+      {/* Modal Nota Pengiriman Pallet & Coreplug (Form B-2 A4 2-Rangkap) */}
+      <NotaPengirimanModal
+        isOpen={showNotaModal}
+        onClose={() => {
+          setShowNotaModal(false);
+          setTxForNota(null);
+        }}
+        transaction={txForNota}
+        allTransactions={transactions}
+        employees={employees}
+        currentUser={currentUser}
+      />
+
+      {/* Modal Nota Penerimaan Produksi Pallet & Coreplug (Form GR-1 A4 2-Rangkap) */}
+      <NotaPenerimaanModal
+        isOpen={showNgrModal}
+        onClose={() => {
+          setShowNgrModal(false);
+          setTxForNgr(null);
+        }}
+        transaction={txForNgr}
+        allTransactions={transactions}
+        employees={employees}
+        currentUser={currentUser}
+      />
     </div>
   );
 };

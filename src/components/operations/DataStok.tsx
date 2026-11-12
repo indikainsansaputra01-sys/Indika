@@ -26,7 +26,7 @@ import {
 import { exportToExcel, exportToCSV, generateStockTakeDocNumber } from '../../utils/exportUtils';
 import { exportToPDF, formatPalletDimension } from '../../utils/pdfExportUtils';
 import { PrintReportModal } from '../common/PrintReportModal';
-import { StockItem, MarketType, QuantityUnit } from '../../types';
+import { StockItem, MarketType, QuantityUnit, PalletSideType } from '../../types';
 import { calculateLocationStock, calculateDailyStock, getPalletColumnDetailString } from '../../utils/stockLocationUtils';
 import {
   normalizePalletDimension,
@@ -48,6 +48,7 @@ export const DataStok: React.FC<DataStokProps> = ({ onNavigateToHistory }) => {
     thresholds,
     updateThresholds,
     transactions,
+    getStock,
     isOperator,
     currentUser,
     masterSizes,
@@ -146,38 +147,44 @@ export const DataStok: React.FC<DataStokProps> = ({ onNavigateToHistory }) => {
       if (!s) continue;
       const normSize = normalizePalletDimension(s.palletSize);
       if (!normSize) continue;
-      const typePal = s.typePallet || 'LS';
-      const pType = s.palletType ? String(s.palletType).trim() : 'Pallet Reamwrap';
-      const mkt = s.marketType ? String(s.marketType).trim() : 'Lokal';
-      const unt = s.unit ? String(s.unit).trim() : 'Set';
+      const typePal = formatTypePallet(s.typePallet);
+      const pType = formatJenisPallet(s.palletType);
+      const mkt = formatMarketType(s.marketType);
+      const unt = formatSatuan(s.unit);
       if (!isAllowed115x140Spec(normSize, pType, mkt, typePal, unt)) {
         continue;
       }
       const rawQty = typeof s.quantity === 'number' && !isNaN(s.quantity) ? Math.max(0, s.quantity) : 0;
-      // Jangan masukkan spek jika tidak memiliki riwayat transaksi sama sekali di sistem
-      // (contoh spek salah input seperti 82x82 Set yang sudah direvisi menjadi Pcs, agar tidak timbul duplikat data atau jatuh ke status Transit)
-      if (transactions.length > 0) {
-        const hasTx = transactions.some(t =>
-          t &&
-          normalizePalletDimension(t.palletSize) === normSize &&
-          (t.typePallet || 'LS') === typePal &&
-          (t.palletType || '').trim().toLowerCase() === pType.toLowerCase() &&
-          (t.marketType || 'Lokal').trim().toLowerCase() === mkt.toLowerCase() &&
-          (t.unit || 'Set').trim().toLowerCase() === unt.toLowerCase()
-        );
-        if (!hasTx) {
-          continue;
-        }
+      
+      // Cek apakah ada riwayat transaksi untuk spek ini
+      const hasTx = transactions.some(t =>
+        t &&
+        normalizePalletDimension(t.palletSize) === normSize &&
+        formatTypePallet(t.typePallet) === typePal &&
+        formatJenisPallet(t.palletType).toLowerCase() === pType.toLowerCase() &&
+        formatMarketType(t.marketType) === mkt &&
+        formatSatuan(t.unit) === unt
+      );
+
+      // Jangan masukkan spek jika transaksi sudah ada tapi spek ini tidak ada transaksinya (spek usang/salah input)
+      if (transactions.length > 0 && !hasTx) {
+        continue;
       }
+
+      // Kuantitas riil mutlak dihitung dari ground-truth getStock (Penerimaan - Pengeluaran)
+      const effectiveQty = hasTx
+        ? getStock(normSize, pType, mkt as MarketType, unt as QuantityUnit, typePal as PalletSideType)
+        : rawQty;
+
       const key = `${normSize}__${typePal}__${pType.toLowerCase()}__${mkt.toLowerCase()}__${unt.toLowerCase()}`;
       map.set(key, {
         ...s,
         palletSize: normSize,
-        typePallet: typePal,
+        typePallet: typePal as any,
         palletType: pType,
         marketType: mkt as any,
         unit: unt as any,
-        quantity: rawQty
+        quantity: effectiveQty
       });
     }
 
@@ -206,30 +213,31 @@ export const DataStok: React.FC<DataStokProps> = ({ onNavigateToHistory }) => {
       if (!t) continue;
       const normSize = normalizePalletDimension(t.palletSize);
       if (!normSize) continue;
-      const typePal = t.typePallet || 'LS';
-      const pType = t.palletType ? String(t.palletType).trim() : 'Pallet Reamwrap';
-      const mkt = t.marketType ? String(t.marketType).trim() : 'Lokal';
-      const unt = t.unit ? String(t.unit).trim() : 'Set';
+      const typePal = formatTypePallet(t.typePallet);
+      const pType = formatJenisPallet(t.palletType);
+      const mkt = formatMarketType(t.marketType);
+      const unt = formatSatuan(t.unit);
       if (!isAllowed115x140Spec(normSize, pType, mkt, typePal, unt)) {
         continue;
       }
       const key = `${normSize}__${typePal}__${pType.toLowerCase()}__${mkt.toLowerCase()}__${unt.toLowerCase()}`;
       if (!map.has(key)) {
+        const liveQty = getStock(normSize, pType, mkt as MarketType, unt as QuantityUnit, typePal as PalletSideType);
         map.set(key, {
           id: `tx_${normSize}_${typePal}_${pType}_${mkt}_${unt}`.replace(/[^a-zA-Z0-9_-]/g, '_'),
           palletSize: normSize,
           palletType: pType,
-          typePallet: typePal,
+          typePallet: typePal as any,
           marketType: mkt as MarketType,
           unit: unt as QuantityUnit,
-          quantity: 0,
+          quantity: liveQty,
           lastUpdated: t.date || '-'
         });
       }
     }
 
     return Array.from(map.values());
-  }, [stocks, masterSizes, transactions]);
+  }, [stocks, masterSizes, transactions, getStock]);
 
   // Set lookup instan O(1) untuk filter shift & tanggal agar tidak melakukan loop bersarang transaksi
   const activeShiftOrDateItemKeys = useMemo(() => {

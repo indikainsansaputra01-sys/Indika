@@ -510,6 +510,21 @@ export const PengeluaranPallet: React.FC = () => {
         </div>
       </div>
 
+      {/* Peringatan Wajib Operasional Anti-Salah Input */}
+      <div className="p-3.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700 rounded-xl text-xs text-amber-950 dark:text-amber-100 flex items-start gap-3 shadow-2xs">
+        <div className="w-7 h-7 rounded-lg bg-amber-600 text-white flex items-center justify-center shrink-0 mt-0.5">
+          <AlertTriangle className="w-4 h-4" />
+        </div>
+        <div className="min-w-0">
+          <div className="text-[10px] font-black uppercase tracking-wider text-amber-700 dark:text-amber-400">
+            Peringatan Operasional Pengeluaran Pallet:
+          </div>
+          <div className="font-extrabold text-xs sm:text-sm mt-0.5 leading-snug">
+            "Pastikan Penginputan Pengeluaran/Pengiriman Pallet  Sudah Benar Dari Ukuran, Spesifikasi, Kolom Pengambilan & Tanggal Pengiriman nya"
+          </div>
+        </div>
+      </div>
+
       {/* Monitoring Warning Banner */}
       {!isOperator && (
         <div className="p-3.5 bg-blue-50 border border-blue-300 rounded-lg text-xs text-blue-900 flex items-center gap-2.5">
@@ -1511,6 +1526,7 @@ export const PengeluaranPallet: React.FC = () => {
         isOpen={showNotaModal}
         onClose={() => setShowNotaModal(false)}
         transaction={lastSubmittedTx}
+        allTransactions={transactions}
         employees={employees}
         currentUser={currentUser}
       />

@@ -17,13 +17,22 @@ import {
   Shield,
   Lock,
   Sparkles,
-  Shuffle
+  Shuffle,
+  Plus,
+  Trash2,
+  Split
 } from 'lucide-react';
 import { ShiftType, MarketType, QuantityUnit, PalletSideType, Transaction } from '../../types';
 import { getAvailableColumnsForPallet } from '../../utils/stockLocationUtils';
 import { normalizePalletDimension } from '../../utils/dimensionUtils';
 import { copyTextToClipboard } from '../../utils/whatsappReportUtils';
 import { getOperatorShiftForDate } from '../../utils/rosterUtils';
+
+export interface SourceColumnAllocation {
+  id: string;
+  column: string;
+  qty: string;
+}
 
 export const PerubahanSpekPallet: React.FC = () => {
   const {
@@ -58,6 +67,13 @@ export const PerubahanSpekPallet: React.FC = () => {
   // Lokasi Kolom
   const [kolomAsal, setKolomAsal] = useState('');
   const [kolomTujuan, setKolomTujuan] = useState('');
+
+  // Mode Ubah Spek: 'single' (1 Kolom Asal) vs 'multi' (2+ Kolom Asal ➔ 1 Kolom Tujuan)
+  const [changeMode, setChangeMode] = useState<'single' | 'multi'>('single');
+  const [sourceAllocations, setSourceAllocations] = useState<SourceColumnAllocation[]>([
+    { id: '1', column: '', qty: '' },
+    { id: '2', column: '', qty: '' }
+  ]);
 
   // Kuantitas & Catatan
   const [quantity, setQuantity] = useState('');
@@ -137,14 +153,58 @@ export const PerubahanSpekPallet: React.FC = () => {
     });
   }, [palletSize, sourcePalletType, typePallet, unit, marketType, transactions]);
 
-  // Stok yang tersedia di Kolom Asal yang dipilih
-  const maxStockInSourceCol = useMemo(() => {
-    if (!kolomAsal.trim()) return null;
+  // Helper cek stok untuk kolom tertentu
+  const getColAvailableStock = (colName: string): number | null => {
+    if (!colName || !colName.trim()) return null;
     const match = detectedAvailableColumns.find(
-      c => c.col.toUpperCase() === kolomAsal.trim().toUpperCase()
+      c => c.col.toUpperCase() === colName.trim().toUpperCase()
     );
     return match ? match.qty : null;
+  };
+
+  // Stok yang tersedia di Kolom Asal yang dipilih
+  const maxStockInSourceCol = useMemo(() => {
+    return getColAvailableStock(kolomAsal);
   }, [detectedAvailableColumns, kolomAsal]);
+
+  // Total kuantitas multi kolom asal yang dialokasikan
+  const totalMultiAllocatedQty = useMemo(() => {
+    return sourceAllocations.reduce((sum, row) => {
+      const q = parseInt(row.qty, 10);
+      return sum + (isNaN(q) || q <= 0 ? 0 : q);
+    }, 0);
+  }, [sourceAllocations]);
+
+  const handleAddSourceRow = () => {
+    setSourceAllocations(prev => [
+      ...prev,
+      { id: Date.now().toString(), column: '', qty: '' }
+    ]);
+  };
+
+  const handleRemoveSourceRow = (id: string) => {
+    if (sourceAllocations.length <= 1) return;
+    setSourceAllocations(prev => prev.filter(r => r.id !== id));
+  };
+
+  const handleUpdateSourceRow = (id: string, field: 'column' | 'qty', val: string) => {
+    setSourceAllocations(prev =>
+      prev.map(r => (r.id === id ? { ...r, [field]: val } : r))
+    );
+  };
+
+  const handleAutoAllocateFromDetected = () => {
+    if (detectedAvailableColumns.length === 0) return;
+    const newRows: SourceColumnAllocation[] = detectedAvailableColumns.map((c, i) => ({
+      id: String(i + 1),
+      column: c.col,
+      qty: String(c.qty)
+    }));
+    setSourceAllocations(newRows.length >= 2 ? newRows : [
+      ...newRows,
+      { id: '2', column: '', qty: '' }
+    ]);
+  };
 
   const requestedQty = parseInt(quantity, 10) || 0;
   const isOverTotalStock = requestedQty > currentSourceStock;
@@ -230,25 +290,95 @@ export const PerubahanSpekPallet: React.FC = () => {
       return;
     }
 
-    if (requestedQty <= 0) {
-      setStatusMessage({ type: 'error', text: 'Jumlah pallet yang diubah harus lebih besar dari 0!' });
-      return;
-    }
+    let cleanAsal = '';
+    let cleanTujuan = '';
+    let finalQty = 0;
+    let notesDesc = notes.trim();
 
-    if (isOverTotalStock) {
-      setStatusMessage({
-        type: 'error',
-        text: `Jumlah yang diubah (${requestedQty} ${unit}) melebihi total stok ${sourcePalletType} yang ada (${currentSourceStock} ${unit})!`
-      });
-      return;
-    }
+    if (changeMode === 'single') {
+      cleanAsal = kolomAsal.trim().toUpperCase();
+      cleanTujuan = (kolomTujuan.trim() || kolomAsal.trim()).toUpperCase();
+      finalQty = requestedQty;
 
-    if (isOverColStock) {
-      setStatusMessage({
-        type: 'error',
-        text: `Jumlah yang diubah (${requestedQty} ${unit}) melebihi stok yang ada di kolom ${kolomAsal.toUpperCase()} (${maxStockInSourceCol} ${unit})!`
-      });
-      return;
+      if (!cleanAsal) {
+        setStatusMessage({ type: 'error', text: 'Pilih atau ketik kolom asal tempat pallet diambil!' });
+        return;
+      }
+
+      if (finalQty <= 0) {
+        setStatusMessage({ type: 'error', text: 'Jumlah pallet yang diubah harus lebih besar dari 0!' });
+        return;
+      }
+
+      if (isOverTotalStock) {
+        setStatusMessage({
+          type: 'error',
+          text: `Jumlah yang diubah (${finalQty} ${unit}) melebihi total stok ${sourcePalletType} yang ada (${currentSourceStock} ${unit})!`
+        });
+        return;
+      }
+
+      if (isOverColStock) {
+        setStatusMessage({
+          type: 'error',
+          text: `Jumlah yang diubah (${finalQty} ${unit}) melebihi stok yang ada di kolom ${cleanAsal} (${maxStockInSourceCol} ${unit})!`
+        });
+        return;
+      }
+    } else {
+      // MULTI-KOLOM ASAL: Ambil dari 2+ Kolom Asal ke 1 Kolom Tujuan
+      const validRows = sourceAllocations.filter(r => r.column.trim());
+      if (validRows.length === 0) {
+        setStatusMessage({ type: 'error', text: 'Tentukan minimal 1 kolom asal pengambilan pallet!' });
+        return;
+      }
+
+      // Cek duplikasi kolom asal
+      const colSet = new Set<string>();
+      for (const r of validRows) {
+        const cUpper = r.column.trim().toUpperCase();
+        if (colSet.has(cUpper)) {
+          setStatusMessage({
+            type: 'error',
+            text: `Kolom asal ganda terdeteksi (${cUpper})! Gunakan satu baris untuk satu kolom asal.`
+          });
+          return;
+        }
+        colSet.add(cUpper);
+
+        const rowQty = parseInt(r.qty, 10);
+        if (isNaN(rowQty) || rowQty <= 0) {
+          setStatusMessage({
+            type: 'error',
+            text: `Jumlah pallet untuk kolom ${cUpper} harus lebih dari 0!`
+          });
+          return;
+        }
+
+        const stockInCol = getColAvailableStock(cUpper);
+        if (stockInCol !== null && rowQty > stockInCol) {
+          setStatusMessage({
+            type: 'error',
+            text: `Stok tidak cukup di kolom ${cUpper}: Hanya ada ${stockInCol} ${unit}, tidak bisa mengambil ${rowQty} ${unit}!`
+          });
+          return;
+        }
+      }
+
+      finalQty = validRows.reduce((acc, r) => acc + parseInt(r.qty, 10), 0);
+      if (finalQty > currentSourceStock) {
+        setStatusMessage({
+          type: 'error',
+          text: `Total kuantitas yang diubah (${finalQty} ${unit}) melebihi total stok ${sourcePalletType} yang ada (${currentSourceStock} ${unit})!`
+        });
+        return;
+      }
+
+      cleanAsal = validRows.map(r => `${r.column.trim().toUpperCase()} (${parseInt(r.qty, 10)} ${unit})`).join(' + ');
+      cleanTujuan = (kolomTujuan.trim() || validRows[0].column.trim()).toUpperCase();
+      notesDesc = notes.trim()
+        ? `[Multi-Kolom] ${notes.trim()} (Asal: ${cleanAsal})`
+        : `Ubah spek multi-kolom dari ${cleanAsal}`;
     }
 
     setIsSubmitting(true);
@@ -264,22 +394,26 @@ export const PerubahanSpekPallet: React.FC = () => {
         typePallet,
         marketType,
         unit,
-        quantity: requestedQty,
-        kolomAsal: kolomAsal.trim().toUpperCase(),
-        kolomTujuan: (kolomTujuan.trim() || kolomAsal.trim()).toUpperCase(),
+        quantity: finalQty,
+        kolomAsal: cleanAsal,
+        kolomTujuan: cleanTujuan,
         operator,
-        notes: notes.trim()
+        notes: notesDesc
       });
 
       if (res.success) {
         setStatusMessage({
           type: 'success',
-          text: `Perubahan spek ${requestedQty} ${unit} ${cleanSize} (${sourcePalletType} ➔ ${targetPalletType}) berhasil disimpan! Sisa ${sourcePalletType}: ${res.remainingSourceStock} ${unit}.`
+          text: `Perubahan spek ${finalQty} ${unit} ${cleanSize} (${sourcePalletType} ➔ ${targetPalletType}) berhasil disimpan! Pallet diambil dari [${cleanAsal}] dan ditempatkan di Kolom ${cleanTujuan}. Sisa ${sourcePalletType}: ${res.remainingSourceStock} ${unit}.`
         });
 
         // Reset form input dinamis
         setQuantity('');
         setNotes('');
+        setSourceAllocations([
+          { id: '1', column: '', qty: '' },
+          { id: '2', column: '', qty: '' }
+        ]);
       } else {
         setStatusMessage({ type: 'error', text: res.message });
       }
@@ -526,6 +660,52 @@ export const PerubahanSpekPallet: React.FC = () => {
             </div>
           </div>
 
+          {/* Mode Switch: 1 Kolom Asal vs 2+ Kolom Asal */}
+          <div className="p-3 bg-white dark:bg-[#111E30] rounded-xl border border-slate-200 dark:border-[#1E3A52] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <span className="text-xs font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wide flex items-center gap-1.5">
+                <Split className="w-3.5 h-3.5 text-[#3886B8]" />
+                <span>Metode Pengambilan Kolom Asal:</span>
+              </span>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                Pilih apakah pallet diubah dari 1 kolom saja atau diambil dari 2 kolom/lebih sekaligus ke 1 kolom tujuan.
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0 bg-slate-100 dark:bg-[#0E1E2E] p-1 rounded-lg border border-slate-300 dark:border-[#1E3A52]">
+              <button
+                type="button"
+                onClick={() => setChangeMode('single')}
+                className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                  changeMode === 'single'
+                    ? 'bg-[#163653] text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                }`}
+              >
+                1 Kolom Asal (Tunggal)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setChangeMode('multi');
+                  if (kolomAsal && !sourceAllocations[0].column) {
+                    setSourceAllocations([
+                      { id: '1', column: kolomAsal, qty: quantity || '' },
+                      { id: '2', column: '', qty: '' }
+                    ]);
+                  }
+                }}
+                className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer flex items-center gap-1.5 ${
+                  changeMode === 'multi'
+                    ? 'bg-[#163653] text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                }`}
+              >
+                <Split className="w-3.5 h-3.5" />
+                <span>2+ Kolom Asal (Multi ➔ 1 Tujuan)</span>
+              </button>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Wrap Type Asal */}
             <div>
@@ -544,30 +724,32 @@ export const PerubahanSpekPallet: React.FC = () => {
               </select>
             </div>
 
-            {/* Input Kolom Asal */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase mb-1.5">
-                Kolom Asal (Lokasi Pengambilan Yard) *
-              </label>
-              <input
-                type="text"
-                value={kolomAsal}
-                onChange={(e) => setKolomAsal(e.target.value.toUpperCase())}
-                disabled={!isOperator || operatorSchedule.isOff}
-                placeholder="cth: F9, F10, F11..."
-                className="w-full px-3 py-2 border border-slate-300 dark:border-[#1E3A52] bg-white dark:bg-[#111E30] text-slate-900 dark:text-white rounded-lg text-xs font-bold font-mono focus:outline-none focus:border-[#3886B8]"
-                required
-              />
-              {maxStockInSourceCol !== null ? (
-                <span className="text-[11px] text-[#16805D] dark:text-emerald-400 font-semibold mt-1 block">
-                  Stok di kolom <b>{kolomAsal}</b> saat ini: <b>{maxStockInSourceCol} {unit}</b>
-                </span>
-              ) : kolomAsal.trim() ? (
-                <span className="text-[11px] text-amber-600 dark:text-amber-400 mt-1 block">
-                  Kolom kustom / baru dipilih
-                </span>
-              ) : null}
-            </div>
+            {/* Mode 1: Input Kolom Asal Tunggal */}
+            {changeMode === 'single' && (
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase mb-1.5">
+                  Kolom Asal (Lokasi Pengambilan Yard) *
+                </label>
+                <input
+                  type="text"
+                  value={kolomAsal}
+                  onChange={(e) => setKolomAsal(e.target.value.toUpperCase())}
+                  disabled={!isOperator || operatorSchedule.isOff}
+                  placeholder="cth: F9, F10, F11..."
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-[#1E3A52] bg-white dark:bg-[#111E30] text-slate-900 dark:text-white rounded-lg text-xs font-bold font-mono focus:outline-none focus:border-[#3886B8]"
+                  required={changeMode === 'single'}
+                />
+                {maxStockInSourceCol !== null ? (
+                  <span className="text-[11px] text-[#16805D] dark:text-emerald-400 font-semibold mt-1 block">
+                    Stok di kolom <b>{kolomAsal}</b> saat ini: <b>{maxStockInSourceCol} {unit}</b>
+                  </span>
+                ) : kolomAsal.trim() ? (
+                  <span className="text-[11px] text-amber-600 dark:text-amber-400 mt-1 block">
+                    Kolom kustom / baru dipilih
+                  </span>
+                ) : null}
+              </div>
+            )}
           </div>
 
           {/* Quick Click Kolom-kolom yang Memiliki Stok Ukuran & Wrap Type Ini */}
@@ -575,26 +757,179 @@ export const PerubahanSpekPallet: React.FC = () => {
             <div className="p-3 bg-white dark:bg-[#111E30] border border-[#CBD5E1] dark:border-[#1E3A52] rounded-lg space-y-1.5">
               <span className="text-[11px] font-bold text-[#163653] dark:text-[#8CCCF0] uppercase tracking-wider flex items-center gap-1.5">
                 <MapPin className="w-3.5 h-3.5 text-[#3886B8]" />
-                <span>Kolom Yard yang Menyimpan Spek {sourcePalletType} Ini:</span>
+                <span>Kolom Yard yang Menyimpan Spek {sourcePalletType} Ini (Klik untuk pilih):</span>
               </span>
               <div className="flex flex-wrap items-center gap-2 pt-1">
-                {detectedAvailableColumns.map(({ col, qty }) => (
+                {detectedAvailableColumns.map(({ col, qty }) => {
+                  const isSelectedSingle = changeMode === 'single' && kolomAsal.toUpperCase() === col.toUpperCase();
+                  const isSelectedMulti = changeMode === 'multi' && sourceAllocations.some(a => a.column.toUpperCase() === col.toUpperCase());
+                  const isSelected = isSelectedSingle || isSelectedMulti;
+
+                  return (
+                    <button
+                      key={col}
+                      type="button"
+                      onClick={() => {
+                        if (changeMode === 'single') {
+                          handleSelectKolomAsal(col);
+                          if (!quantity) setQuantity(String(qty));
+                        } else {
+                          const existingIdx = sourceAllocations.findIndex(a => a.column.toUpperCase() === col.toUpperCase());
+                          if (existingIdx !== -1) {
+                            handleUpdateSourceRow(sourceAllocations[existingIdx].id, 'qty', String(qty));
+                          } else {
+                            const emptyIdx = sourceAllocations.findIndex(a => !a.column.trim());
+                            if (emptyIdx !== -1) {
+                              handleUpdateSourceRow(sourceAllocations[emptyIdx].id, 'column', col);
+                              handleUpdateSourceRow(sourceAllocations[emptyIdx].id, 'qty', String(qty));
+                            } else {
+                              setSourceAllocations(prev => [
+                                ...prev,
+                                { id: Date.now().toString(), column: col, qty: String(qty) }
+                              ]);
+                            }
+                          }
+                        }
+                      }}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono font-bold cursor-pointer transition-all border ${
+                        isSelected
+                          ? 'bg-[#3886B8] text-white border-[#3886B8] shadow-xs scale-102'
+                          : 'bg-[#F1F5F9] dark:bg-[#16263B] text-slate-800 dark:text-slate-200 border-slate-300 dark:border-[#1E3A52] hover:border-[#3886B8]'
+                      }`}
+                    >
+                      <span>{col}:</span>
+                      <span className={isSelected ? 'text-white font-extrabold' : 'text-[#3886B8] font-extrabold'}>
+                        {qty} {unit}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Mode 2: Multi Kolom Asal Builder */}
+          {changeMode === 'multi' && (
+            <div className="p-3.5 bg-blue-50/40 dark:bg-[#0E2033] border border-blue-200 dark:border-[#1E4366] rounded-xl space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-blue-100 dark:border-[#1E4366] pb-2">
+                <div>
+                  <span className="text-xs font-extrabold text-blue-950 dark:text-blue-100 uppercase tracking-wider">
+                    Daftar Kolom Asal Pengambilan Pallet ({sourcePalletType}) *
+                  </span>
+                  <p className="text-[11px] text-blue-800 dark:text-blue-300">
+                    Tentukan jumlah yang diambil dari masing-masing kolom asal untuk dikonversi menjadi {targetPalletType}.
+                  </p>
+                </div>
+                {detectedAvailableColumns.length > 0 && (
                   <button
-                    key={col}
                     type="button"
-                    onClick={() => handleSelectKolomAsal(col)}
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono font-bold cursor-pointer transition-all border ${
-                      kolomAsal.toUpperCase() === col.toUpperCase()
-                        ? 'bg-[#3886B8] text-white border-[#3886B8] shadow-xs scale-102'
-                        : 'bg-[#F1F5F9] dark:bg-[#16263B] text-slate-800 dark:text-slate-200 border-slate-300 dark:border-[#1E3A52] hover:border-[#3886B8]'
-                    }`}
+                    onClick={handleAutoAllocateFromDetected}
+                    className="px-2.5 py-1 text-xs font-bold bg-blue-100 dark:bg-blue-900/60 hover:bg-blue-200 text-blue-800 dark:text-blue-200 rounded-md transition-colors cursor-pointer self-start sm:self-auto shrink-0"
                   >
-                    <span>{col}:</span>
-                    <span className={kolomAsal.toUpperCase() === col.toUpperCase() ? 'text-white font-extrabold' : 'text-[#3886B8] font-extrabold'}>
-                      {qty} {unit}
-                    </span>
+                    Ambil Semua dari Kolom Terdeteksi
                   </button>
-                ))}
+                )}
+              </div>
+
+              {/* Rows */}
+              <div className="space-y-2">
+                {sourceAllocations.map((row, idx) => {
+                  const rowStock = getColAvailableStock(row.column);
+                  return (
+                    <div
+                      key={row.id}
+                      className="flex flex-col sm:flex-row sm:items-center gap-2 p-2.5 rounded-lg bg-white dark:bg-[#111E30] border border-slate-200 dark:border-[#1E3A52] shadow-2xs"
+                    >
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="w-6 h-6 rounded-full bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 text-xs font-bold flex items-center justify-center shrink-0">
+                          #{idx + 1}
+                        </span>
+                        <span className="text-xs font-bold text-slate-700 dark:text-slate-300">Kolom Asal:</span>
+                      </div>
+
+                      {/* Input Kolom Asal */}
+                      <div className="flex-1 min-w-[140px]">
+                        <input
+                          type="text"
+                          value={row.column}
+                          onChange={(e) => handleUpdateSourceRow(row.id, 'column', e.target.value.toUpperCase())}
+                          placeholder="Cth: F9, F10..."
+                          className="w-full px-2.5 py-1.5 border border-slate-300 dark:border-[#1E3A52] bg-white dark:bg-[#0E1E2E] text-slate-900 dark:text-white rounded text-xs font-bold font-mono uppercase focus:outline-none focus:border-[#3886B8]"
+                          required={changeMode === 'multi'}
+                        />
+                      </div>
+
+                      {/* Badge Stok Kolom */}
+                      <div className="text-[11px] min-w-[110px] shrink-0 text-slate-600 dark:text-slate-400 font-mono">
+                        {rowStock !== null ? (
+                          <span className="text-emerald-700 dark:text-emerald-400 font-semibold bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-800">
+                            Stok: <b>{rowStock}</b> {unit}
+                          </span>
+                        ) : row.column.trim() ? (
+                          <span className="text-slate-500 italic bg-slate-50 dark:bg-[#16263B] px-2 py-0.5 rounded border border-slate-200 dark:border-[#1E3A52]">
+                            Kolom baru
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 italic">Pilih kolom</span>
+                        )}
+                      </div>
+
+                      {/* Input Qty */}
+                      <div className="w-full sm:w-28 shrink-0 flex items-center gap-1">
+                        <input
+                          type="number"
+                          min="1"
+                          max={rowStock !== null ? rowStock : undefined}
+                          value={row.qty}
+                          onChange={(e) => handleUpdateSourceRow(row.id, 'qty', e.target.value)}
+                          placeholder="Qty"
+                          className="w-full px-2.5 py-1.5 border border-slate-300 dark:border-[#1E3A52] bg-white dark:bg-[#0E1E2E] text-slate-900 dark:text-white rounded text-xs font-bold font-mono text-right focus:outline-none focus:border-[#3886B8]"
+                          required={changeMode === 'multi'}
+                        />
+                        <span className="text-xs font-medium text-slate-500 shrink-0">{unit}</span>
+                      </div>
+
+                      {/* Tombol Ambil Semua untuk Baris Ini */}
+                      {rowStock !== null && rowStock > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateSourceRow(row.id, 'qty', String(rowStock))}
+                          className="px-2 py-1 bg-blue-50 dark:bg-blue-900/40 hover:bg-blue-100 text-[#3886B8] dark:text-[#8CCCF0] text-[10px] font-bold rounded border border-blue-200 dark:border-[#1E4366] shrink-0 cursor-pointer"
+                          title={`Ambil seluruh stok di kolom ${row.column}`}
+                        >
+                          Semua ({rowStock})
+                        </button>
+                      )}
+
+                      {/* Tombol Hapus Baris */}
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveSourceRow(row.id)}
+                        disabled={sourceAllocations.length <= 1}
+                        className="p-1.5 text-slate-400 hover:text-rose-600 disabled:opacity-30 disabled:hover:text-slate-400 shrink-0 rounded transition-colors cursor-pointer"
+                        title="Hapus baris kolom asal ini"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Action Rows */}
+              <div className="flex items-center justify-between pt-1">
+                <button
+                  type="button"
+                  onClick={handleAddSourceRow}
+                  className="px-3 py-1.5 text-xs font-bold bg-white dark:bg-[#111E30] hover:bg-blue-50 dark:hover:bg-[#16263B] text-[#3886B8] dark:text-[#8CCCF0] border border-blue-300 dark:border-[#1E4366] rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ Tambah Kolom Asal Lainnya</span>
+                </button>
+
+                <div className="text-xs font-mono font-bold text-blue-900 dark:text-blue-200 bg-blue-100/70 dark:bg-blue-950/60 px-3 py-1 rounded-lg">
+                  Total Diambil: <span className="text-sm font-extrabold text-blue-950 dark:text-white">{totalMultiAllocatedQty}</span> {unit}
+                </div>
               </div>
             </div>
           )}
@@ -627,42 +962,57 @@ export const PerubahanSpekPallet: React.FC = () => {
             </div>
 
             {/* Kuantitas yang Diubah */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase">
-                  Jumlah yang Diubah ({unit}) *
-                </label>
-                {maxStockInSourceCol !== null && maxStockInSourceCol > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setQuantity(String(maxStockInSourceCol))}
-                    className="text-[11px] font-bold text-[#3886B8] hover:underline cursor-pointer"
-                  >
-                    Maks Kolom ({maxStockInSourceCol})
-                  </button>
+            {changeMode === 'single' ? (
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase">
+                    Jumlah yang Diubah ({unit}) *
+                  </label>
+                  {maxStockInSourceCol !== null && maxStockInSourceCol > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setQuantity(String(maxStockInSourceCol))}
+                      className="text-[11px] font-bold text-[#3886B8] hover:underline cursor-pointer"
+                    >
+                      Maks Kolom ({maxStockInSourceCol})
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="number"
+                  min="1"
+                  max={maxStockInSourceCol || currentSourceStock || undefined}
+                  value={quantity}
+                  onChange={(e) => setQuantity(e.target.value)}
+                  disabled={!isOperator || operatorSchedule.isOff}
+                  placeholder="0"
+                  className={`w-full px-3 py-2 border rounded-lg text-xs font-bold font-mono text-right focus:outline-none ${
+                    isOverTotalStock || isOverColStock
+                      ? 'border-rose-500 bg-rose-50 dark:bg-rose-950/40 text-rose-900 dark:text-rose-200'
+                      : 'border-slate-300 dark:border-[#1E3A52] bg-white dark:bg-[#111E30] text-slate-900 dark:text-white focus:border-[#3886B8]'
+                  }`}
+                  required={changeMode === 'single'}
+                />
+                {(isOverTotalStock || isOverColStock) && (
+                  <span className="text-[11px] text-rose-600 dark:text-rose-400 font-semibold mt-1 block">
+                    Jumlah melebihi stok yang tersedia!
+                  </span>
                 )}
               </div>
-              <input
-                type="number"
-                min="1"
-                max={maxStockInSourceCol || currentSourceStock || undefined}
-                value={quantity}
-                onChange={(e) => setQuantity(e.target.value)}
-                disabled={!isOperator || operatorSchedule.isOff}
-                placeholder="0"
-                className={`w-full px-3 py-2 border rounded-lg text-xs font-bold font-mono text-right focus:outline-none ${
-                  isOverTotalStock || isOverColStock
-                    ? 'border-rose-500 bg-rose-50 dark:bg-rose-950/40 text-rose-900 dark:text-rose-200'
-                    : 'border-slate-300 dark:border-[#1E3A52] bg-white dark:bg-[#111E30] text-slate-900 dark:text-white focus:border-[#3886B8]'
-                }`}
-                required
-              />
-              {(isOverTotalStock || isOverColStock) && (
-                <span className="text-[11px] text-rose-600 dark:text-rose-400 font-semibold mt-1 block">
-                  Jumlah melebihi stok yang tersedia!
+            ) : (
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase mb-1.5">
+                  Total Pallet Dikonversi ({unit}) *
+                </label>
+                <div className="w-full px-3 py-2 border border-slate-300 dark:border-[#1E3A52] bg-slate-100 dark:bg-[#111E30] text-slate-900 dark:text-white rounded-lg text-xs font-extrabold font-mono text-right flex items-center justify-between">
+                  <span className="text-[11px] text-slate-500 font-normal">Otomatis Multi-Kolom:</span>
+                  <span className="text-sm text-blue-900 dark:text-blue-300 font-black">{totalMultiAllocatedQty} {unit}</span>
+                </div>
+                <span className="text-[10px] text-slate-500 dark:text-slate-400 mt-1 block">
+                  Dihitung otomatis dari akumulasi seluruh kolom asal di atas.
                 </span>
-              )}
-            </div>
+              </div>
+            )}
 
             {/* Kolom Penempatan Hasil Ubah Spek */}
             <div>
@@ -674,15 +1024,35 @@ export const PerubahanSpekPallet: React.FC = () => {
                 value={kolomTujuan}
                 onChange={(e) => setKolomTujuan(e.target.value.toUpperCase())}
                 disabled={!isOperator || operatorSchedule.isOff}
-                placeholder="Sama dengan kolom asal atau ketik baru..."
+                placeholder={changeMode === 'single' ? 'Sama dengan kolom asal atau ketik baru...' : 'Ketik kolom tujuan penyimpanan (cth: F12)...'}
                 className="w-full px-3 py-2 border border-slate-300 dark:border-[#1E3A52] bg-white dark:bg-[#111E30] text-slate-900 dark:text-white rounded-lg text-xs font-bold font-mono focus:outline-none focus:border-[#3886B8]"
                 required
               />
               <span className="text-[10px] text-slate-500 dark:text-slate-400 mt-1 block">
-                Default sama dengan kolom asal ({kolomAsal || '-'}), atau ganti jika dipindahkan.
+                {changeMode === 'single'
+                  ? `Default sama dengan kolom asal (${kolomAsal || '-'}), atau ganti jika dipindahkan.`
+                  : 'Kolom tempat forklift menyimpan seluruh pallet hasil ubah spek.'}
               </span>
             </div>
           </div>
+
+          {/* Visual Summary Alur Multi-Kolom */}
+          {changeMode === 'multi' && sourceAllocations.some(a => a.column.trim()) && (
+            <div className="p-2.5 bg-white dark:bg-[#111E30] rounded-lg border border-blue-200 dark:border-[#1E4366] text-xs font-mono flex flex-wrap items-center gap-2 text-slate-700 dark:text-slate-300">
+              <span className="font-bold text-[#163653] dark:text-[#8CCCF0]">Alur Perubahan Spek:</span>
+              <span className="bg-slate-100 dark:bg-[#0E1E2E] px-2 py-0.5 rounded text-slate-800 dark:text-slate-200 font-bold">
+                {sourceAllocations
+                  .filter(a => a.column.trim())
+                  .map(a => `${a.column.trim().toUpperCase()} (${a.qty || '0'} ${unit})`)
+                  .join(' + ') || '...'}
+                <span className="text-[10px] text-slate-500 ml-1">[{sourcePalletType}]</span>
+              </span>
+              <ArrowRight className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+              <span className="bg-emerald-100 dark:bg-emerald-950/60 text-emerald-900 dark:text-emerald-200 px-2 py-0.5 rounded font-extrabold">
+                Kolom {kolomTujuan.trim().toUpperCase() || '?'} (Total: {totalMultiAllocatedQty} {unit} [{targetPalletType}])
+              </span>
+            </div>
+          )}
 
           {/* Catatan Perubahan Spek */}
           <div>
@@ -701,7 +1071,7 @@ export const PerubahanSpekPallet: React.FC = () => {
         </div>
 
         {/* 4. Live Simulation Card: Perbandingan Sebelum & Sesudah */}
-        {requestedQty > 0 && palletSize.trim() && (
+        {((changeMode === 'single' ? requestedQty : totalMultiAllocatedQty) > 0) && palletSize.trim() && (
           <div className="p-4 bg-[#8CCCF0]/10 border border-[#8CCCF0]/30 rounded-xl space-y-2.5">
             <div className="text-xs font-bold text-[#163653] dark:text-[#8CCCF0] uppercase tracking-wide flex items-center gap-1.5">
               <Info className="w-4 h-4 text-[#3886B8]" />
@@ -715,11 +1085,11 @@ export const PerubahanSpekPallet: React.FC = () => {
                   Spek Asal ({sourcePalletType}):
                 </span>
                 <div className="text-sm font-bold font-mono text-slate-900 dark:text-white mt-1">
-                  {currentSourceStock} {unit} ➔ <span className="text-rose-600 font-extrabold">{Math.max(0, currentSourceStock - requestedQty)} {unit}</span>
-                  <span className="text-xs text-rose-600 font-semibold ml-1.5">(-{requestedQty})</span>
+                  {currentSourceStock} {unit} ➔ <span className="text-rose-600 font-extrabold">{Math.max(0, currentSourceStock - (changeMode === 'single' ? requestedQty : totalMultiAllocatedQty))} {unit}</span>
+                  <span className="text-xs text-rose-600 font-semibold ml-1.5">(-{changeMode === 'single' ? requestedQty : totalMultiAllocatedQty})</span>
                 </div>
                 <div className="text-[10px] text-slate-500 mt-1">
-                  Diambil dari Kolom <b>{kolomAsal || '-'}</b>
+                  Diambil dari {changeMode === 'single' ? `Kolom ${kolomAsal || '-'}` : `Multi-Kolom: ${sourceAllocations.filter(a => a.column.trim()).map(a => `${a.column.toUpperCase()} (${a.qty} ${unit})`).join(' + ')}`}
                 </div>
               </div>
 
@@ -729,11 +1099,11 @@ export const PerubahanSpekPallet: React.FC = () => {
                   Spek Baru ({targetPalletType}):
                 </span>
                 <div className="text-sm font-bold font-mono text-slate-900 dark:text-white mt-1">
-                  {currentTargetStock} {unit} ➔ <span className="text-emerald-600 font-extrabold">{currentTargetStock + requestedQty} {unit}</span>
-                  <span className="text-xs text-emerald-600 font-semibold ml-1.5">(+{requestedQty})</span>
+                  {currentTargetStock} {unit} ➔ <span className="text-emerald-600 font-extrabold">{currentTargetStock + (changeMode === 'single' ? requestedQty : totalMultiAllocatedQty)} {unit}</span>
+                  <span className="text-xs text-emerald-600 font-semibold ml-1.5">(+{changeMode === 'single' ? requestedQty : totalMultiAllocatedQty})</span>
                 </div>
                 <div className="text-[10px] text-slate-500 mt-1">
-                  Ditempatkan di Kolom <b>{kolomTujuan || kolomAsal || '-'}</b>
+                  Ditempatkan di Kolom <b>{kolomTujuan || (changeMode === 'single' ? kolomAsal : '') || '-'}</b>
                 </div>
               </div>
             </div>
@@ -750,6 +1120,11 @@ export const PerubahanSpekPallet: React.FC = () => {
               setKolomAsal('');
               setKolomTujuan('');
               setNotes('');
+              setChangeMode('single');
+              setSourceAllocations([
+                { id: '1', column: '', qty: '' },
+                { id: '2', column: '', qty: '' }
+              ]);
               setStatusMessage(null);
             }}
             disabled={isSubmitting}
@@ -760,7 +1135,14 @@ export const PerubahanSpekPallet: React.FC = () => {
 
           <button
             type="submit"
-            disabled={isSubmitting || !isOperator || operatorSchedule.isOff || requestedQty <= 0 || isOverTotalStock || isOverColStock}
+            disabled={
+              isSubmitting ||
+              !isOperator ||
+              operatorSchedule.isOff ||
+              (changeMode === 'single'
+                ? requestedQty <= 0 || isOverTotalStock || isOverColStock
+                : totalMultiAllocatedQty <= 0 || totalMultiAllocatedQty > currentSourceStock)
+            }
             className="w-full sm:w-auto px-6 py-2.5 bg-[#3886B8] hover:bg-[#2B6B94] disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold rounded-lg transition-all shadow-xs cursor-pointer flex items-center justify-center gap-2"
           >
             {isSubmitting ? (

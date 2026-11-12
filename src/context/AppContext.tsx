@@ -15,7 +15,8 @@ import {
   TransactionType,
   QuantityUnit,
   PalletSideType,
-  ThemeMode
+  ThemeMode,
+  AppEnvironment
 } from '../types';
 import {
   INITIAL_EMPLOYEES,
@@ -26,7 +27,14 @@ import {
   INITIAL_MASTER_TYPES,
   INITIAL_MASTER_CUSTOMERS
 } from '../utils/seedData';
-import { normalizePalletDimension, isAllowed115x140Spec } from '../utils/dimensionUtils';
+import {
+  normalizePalletDimension,
+  isAllowed115x140Spec,
+  formatTypePallet,
+  formatJenisPallet,
+  formatMarketType,
+  formatSatuan
+} from '../utils/dimensionUtils';
 
 interface ToastNotification {
   id: string;
@@ -50,6 +58,11 @@ interface AppContextType {
   setTheme: (theme: ThemeMode) => void;
   toggleTheme: () => void;
   
+  // Environment Management (Operasional vs Stok Take)
+  appEnvironment: AppEnvironment;
+  setAppEnvironment: (env: AppEnvironment) => void;
+  syncStockTakeToProduction: () => Promise<{ success: boolean; message: string; count?: number }>;
+
   // Data
   transactions: Transaction[];
   stocks: StockItem[];
@@ -80,6 +93,7 @@ interface AppContextType {
     kolomTujuan?: string;
     noRun?: string;
     operator: string;
+    notes?: string;
   }) => Promise<{ success: boolean; message: string; currentStock?: number; createdTx?: Transaction }>;
 
   convertPalletSpec: (params: {
@@ -167,6 +181,7 @@ interface AppContextType {
 
   // System
   resetDemoData: (operatorPassword?: string) => Promise<{ success: boolean; message: string }>;
+  importDatabaseBackup: (json: any) => Promise<{ success: boolean; message: string; count?: number }>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -175,6 +190,19 @@ import { getOperationalShift } from '../utils/shiftReportUtils';
 
 export const detectCurrentShift = (): ShiftType => {
   return getOperationalShift();
+};
+
+export const getInitialEnvironment = (): AppEnvironment => {
+  try {
+    if (typeof window !== 'undefined') {
+      const path = window.location.pathname.toLowerCase();
+      const params = new URLSearchParams(window.location.search);
+      if (path.startsWith('/stocktake') || params.get('env') === 'stocktake') {
+        return 'stocktake';
+      }
+    }
+  } catch {}
+  return 'operasional';
 };
 
 const STORAGE_KEYS = {
@@ -192,11 +220,45 @@ const STORAGE_KEYS = {
 };
 
 /**
+ * Canonical matcher for pallet stock items, transactions, and filters
+ */
+export const isMatchingStock = (
+  item?: StockItem | Transaction | { palletSize?: string; typePallet?: string; palletType?: string; marketType?: string; unit?: string } | null,
+  size?: string,
+  type?: string,
+  market?: string,
+  unit?: string,
+  typePallet?: string
+): boolean => {
+  if (!item) return false;
+  const itemSize = normalizePalletDimension(item.palletSize);
+  const targetSize = normalizePalletDimension(size);
+  if (!itemSize || !targetSize || itemSize !== targetSize) return false;
+
+  if (typePallet && typePallet !== 'ALL') {
+    if (formatTypePallet(item.typePallet) !== formatTypePallet(typePallet)) return false;
+  }
+  if (type && type !== 'ALL') {
+    const itemPType = formatJenisPallet(item.palletType).toLowerCase();
+    const targetPType = formatJenisPallet(type).toLowerCase();
+    if (itemPType !== targetPType) return false;
+  }
+  if (market && market !== 'ALL') {
+    if (formatMarketType(item.marketType) !== formatMarketType(market)) return false;
+  }
+  if (unit && unit !== 'ALL') {
+    if (formatSatuan(item.unit) !== formatSatuan(unit)) return false;
+  }
+  return true;
+};
+
+/**
  * Merges stock items by canonical specification:
  * normalized size, typePallet (LS/SS), palletType, marketType, and unit.
- * Sums duplicate quantities and prunes zero-quantity or duplicate documents.
+ * Automatically reconciles with transactions ledger so pengeluaran is never ignored,
+ * prevents duplicate document summing, and prunes duplicate documents.
  */
-export function consolidateStocks(rawStocks: StockItem[]): {
+export function consolidateStocks(rawStocks: StockItem[], transactionsList: Transaction[] = []): {
   consolidated: StockItem[];
   duplicatesToPrune: string[];
   canonicalUpdates: StockItem[];
@@ -218,21 +280,33 @@ export function consolidateStocks(rawStocks: StockItem[]): {
     const normSize = normalizePalletDimension(item.palletSize);
     if (!normSize) continue;
 
-    const typePallet = (item.typePallet ? String(item.typePallet).trim() : 'LS') as PalletSideType;
-    const cleanType = item.palletType ? String(item.palletType).trim() : 'Pallet Reamwrap';
-    const market = (item.marketType ? String(item.marketType).trim() : 'Lokal') as MarketType;
-    const unit = (item.unit ? String(item.unit).trim() : 'Set') as QuantityUnit;
+    const typePallet = formatTypePallet(item.typePallet) as PalletSideType;
+    const cleanType = formatJenisPallet(item.palletType);
+    const market = formatMarketType(item.marketType) as MarketType;
+    const unit = formatSatuan(item.unit) as QuantityUnit;
     const rawQty = typeof item.quantity === 'number' && !isNaN(item.quantity) ? item.quantity : 0;
-    const canonicalKey = `${normSize}__${typePallet}__${cleanType.toLowerCase()}__${market.toLowerCase()}__${unit.toLowerCase()}`;
-    const canonicalDocId = `stk_${normSize}_${typePallet}_${cleanType}_${market}_${unit}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const isItemStockTake = item.isStockTake === true || item.environment === 'stocktake' || (Boolean(item.id) && item.id.startsWith('stk_stocktake_'));
+    const docPrefix = isItemStockTake ? 'stk_stocktake_' : 'stk_';
+    const canonicalKey = `${isItemStockTake ? 'STKTAKE_' : ''}${normSize}__${typePallet}__${cleanType.toLowerCase()}__${market.toLowerCase()}__${unit.toLowerCase()}`;
+    const canonicalDocId = `${docPrefix}${normSize}_${typePallet}_${cleanType}_${market}_${unit}`.replace(/[^a-zA-Z0-9_-]/g, '_');
 
-    const effectiveQty = Math.max(0, rawQty);
+    let effectiveQty = Math.max(0, rawQty);
 
     if (map.has(canonicalKey)) {
       const existing = map.get(canonicalKey)!;
-      existing.quantity += effectiveQty;
-      if (item.lastUpdated && (!existing.lastUpdated || item.lastUpdated > existing.lastUpdated)) {
-        existing.lastUpdated = item.lastUpdated;
+      const isCurrentDocCanonical = item.id === canonicalDocId;
+      const isExistingDocCanonical = existing.id === canonicalDocId;
+
+      // Prioritaskan dokumen kanonikal (id standar) atau update tanggal yang lebih baru
+      const shouldUseCurrent = (!isExistingDocCanonical && isCurrentDocCanonical) ||
+        (isCurrentDocCanonical === isExistingDocCanonical && (item.lastUpdated || '') >= (existing.lastUpdated || ''));
+
+      if (shouldUseCurrent) {
+        existing.quantity = effectiveQty;
+        existing.id = canonicalDocId;
+        if (item.lastUpdated) {
+          existing.lastUpdated = item.lastUpdated;
+        }
       }
       canonicalUpdates.push(existing);
       if (item.id && item.id !== canonicalDocId) {
@@ -247,11 +321,76 @@ export function consolidateStocks(rawStocks: StockItem[]): {
         typePallet,
         marketType: market,
         unit,
-        quantity: effectiveQty
+        quantity: effectiveQty,
+        isStockTake: isItemStockTake,
+        environment: isItemStockTake ? 'stocktake' : 'operasional'
       };
       map.set(canonicalKey, cleanItem);
       if (item.id && item.id !== canonicalDocId) {
         duplicatesToPrune.push(item.id);
+        canonicalUpdates.push(cleanItem);
+      } else if (rawQty !== effectiveQty) {
+        canonicalUpdates.push(cleanItem);
+      }
+    }
+  }
+
+  // Masukkan spesifikasi pallet dari transaksi ke katalog jika belum ada
+  // PENTING: Jika katalog stok sudah ada isinya (hasil stok take / database aktif), stok spesifikasi baru diinisialisasi 0 (TIDAK MEMBANGKITKAN STOK LAMA)
+  if (Array.isArray(transactionsList) && transactionsList.length > 0) {
+    const isCatalogEmpty = rawStocks.length === 0;
+    for (const t of transactionsList) {
+      if (!t) continue;
+      const tNormSize = normalizePalletDimension(t.palletSize);
+      if (!tNormSize) continue;
+      const tTypePallet = formatTypePallet(t.typePallet) as PalletSideType;
+      const tCleanType = formatJenisPallet(t.palletType);
+      const tMarket = formatMarketType(t.marketType) as MarketType;
+      const tUnit = formatSatuan(t.unit) as QuantityUnit;
+      const isTxStockTake = t.isStockTake === true || t.environment === 'stocktake' || (Boolean(t.id) && t.id.startsWith('tx_stocktake_'));
+      const docPrefix = isTxStockTake ? 'stk_stocktake_' : 'stk_';
+      const canonicalKey = `${isTxStockTake ? 'STKTAKE_' : ''}${tNormSize}__${tTypePallet}__${tCleanType.toLowerCase()}__${tMarket.toLowerCase()}__${tUnit.toLowerCase()}`;
+      if (!map.has(canonicalKey)) {
+        let netQty = 0;
+        if (isCatalogEmpty) {
+          // Hanya hitung net transaksi jika database stok benar-benar kosong saat inisialisasi awal
+          const matchTxs = transactionsList.filter(tr => {
+            if (!tr) return false;
+            const trIsStockTake = tr.isStockTake === true || tr.environment === 'stocktake' || (Boolean(tr.id) && tr.id.startsWith('tx_stocktake_'));
+            if (trIsStockTake !== isTxStockTake) return false;
+            return isMatchingStock(tr, tNormSize, tCleanType, tMarket, tUnit, tTypePallet);
+          });
+          const inSum = matchTxs.filter(tr => tr.transactionType === 'PENERIMAAN').reduce((acc, tr) => acc + (tr.quantity || 0), 0);
+          const outSum = matchTxs.filter(tr => tr.transactionType === 'PENGELUARAN').reduce((acc, tr) => acc + (tr.quantity || 0), 0);
+          const specOutSum = matchTxs.filter(tr => tr.transactionType === 'UBAH_SPEK').reduce((acc, tr) => acc + (tr.quantity || 0), 0);
+          const specInSum = transactionsList.filter(tr => {
+            if (!tr || tr.transactionType !== 'UBAH_SPEK' || !tr.targetPalletType) return false;
+            const trIsStockTake = tr.isStockTake === true || tr.environment === 'stocktake' || (Boolean(tr.id) && tr.id.startsWith('tx_stocktake_'));
+            if (trIsStockTake !== isTxStockTake) return false;
+            return isMatchingStock({
+              palletSize: tr.palletSize,
+              typePallet: tr.typePallet,
+              palletType: tr.targetPalletType,
+              marketType: tr.marketType,
+              unit: tr.unit
+            }, tNormSize, tCleanType, tMarket, tUnit, tTypePallet);
+          }).reduce((acc, tr) => acc + (tr.quantity || 0), 0);
+          netQty = Math.max(0, inSum + specInSum - outSum - specOutSum);
+        }
+        const canonicalDocId = `${docPrefix}${tNormSize}_${tTypePallet}_${tCleanType}_${tMarket}_${tUnit}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const cleanItem: StockItem = {
+          id: canonicalDocId,
+          palletSize: tNormSize,
+          palletType: tCleanType,
+          typePallet: tTypePallet,
+          marketType: tMarket,
+          unit: tUnit,
+          quantity: netQty,
+          lastUpdated: t.date || new Date().toISOString().split('T')[0],
+          isStockTake: isTxStockTake,
+          environment: isTxStockTake ? 'stocktake' : 'operasional'
+        };
+        map.set(canonicalKey, cleanItem);
         canonicalUpdates.push(cleanItem);
       }
     }
@@ -312,6 +451,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [activeShift, setActiveShift] = useState<ShiftType>(detectCurrentShift());
 
+  // Environment mode: 'operasional' (Link 1: /finishpalletikk) vs 'stocktake' (Link 2: /stocktake)
+  const [appEnvironment, setAppEnvironmentState] = useState<AppEnvironment>(getInitialEnvironment);
+
+  useEffect(() => {
+    const handlePop = () => {
+      setAppEnvironmentState(getInitialEnvironment());
+    };
+    window.addEventListener('popstate', handlePop);
+    return () => window.removeEventListener('popstate', handlePop);
+  }, []);
+
+  const setAppEnvironment = (env: AppEnvironment) => {
+    setAppEnvironmentState(env);
+    try {
+      if (typeof window !== 'undefined') {
+        const segments = window.location.pathname.replace(/^\/+|\/+$/g, '').split('/');
+        const view = (segments[0] === 'finishpalletikk' || segments[0] === 'stocktake') && segments[1] ? segments[1] : '';
+        const targetBase = env === 'stocktake' ? '/stocktake' : '/finishpalletikk';
+        const targetPath = targetBase + (view ? `/${view}` : '');
+        window.history.pushState({ env, view }, '', targetPath + (window.location.search || ''));
+      }
+    } catch {}
+  };
+
   const [employees, setEmployees] = useState<Employee[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.EMPLOYEES);
@@ -321,7 +484,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
-  const [transactions, setTransactions] = useState<Transaction[]>(() => {
+  const [rawTransactions, setRawTransactions] = useState<Transaction[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
       const list: Transaction[] = saved ? JSON.parse(saved) : INITIAL_TRANSACTIONS;
@@ -331,7 +494,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
-  const [stocks, setStocks] = useState<StockItem[]>(() => {
+  const [rawStocks, setRawStocks] = useState<StockItem[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.STOCKS);
       const list: StockItem[] = saved ? JSON.parse(saved) : INITIAL_STOCKS;
@@ -340,6 +503,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return INITIAL_STOCKS;
     }
   });
+
+  // Filtered transactions for current active environment
+  const transactions = React.useMemo(() => {
+    if (appEnvironment === 'stocktake') {
+      return rawTransactions.filter(t => t.isStockTake === true || t.environment === 'stocktake' || (Boolean(t.id) && t.id.startsWith('tx_stocktake_')));
+    }
+    return rawTransactions.filter(t => t.isStockTake !== true && t.environment !== 'stocktake' && (!t.id || !t.id.startsWith('tx_stocktake_')));
+  }, [rawTransactions, appEnvironment]);
+
+  // Filtered stocks for current active environment
+  const stocks = React.useMemo(() => {
+    if (appEnvironment === 'stocktake') {
+      return rawStocks.filter(s => s.isStockTake === true || s.environment === 'stocktake' || (Boolean(s.id) && s.id.startsWith('stk_stocktake_')));
+    }
+    return rawStocks.filter(s => s.isStockTake !== true && s.environment !== 'stocktake' && (!s.id || !s.id.startsWith('stk_stocktake_')));
+  }, [rawStocks, appEnvironment]);
+
+  const setTransactions = (updater: React.SetStateAction<Transaction[]>) => {
+    setRawTransactions(prev => {
+      const currentFiltered = appEnvironment === 'stocktake'
+        ? prev.filter(t => t.isStockTake === true || t.environment === 'stocktake' || (Boolean(t.id) && t.id.startsWith('tx_stocktake_')))
+        : prev.filter(t => t.isStockTake !== true && t.environment !== 'stocktake' && (!t.id || !t.id.startsWith('tx_stocktake_')));
+      const newFiltered = typeof updater === 'function' ? updater(currentFiltered) : updater;
+      const otherEnvTxs = appEnvironment === 'stocktake'
+        ? prev.filter(t => !(t.isStockTake === true || t.environment === 'stocktake' || (Boolean(t.id) && t.id.startsWith('tx_stocktake_'))))
+        : prev.filter(t => !(t.isStockTake !== true && t.environment !== 'stocktake' && (!t.id || !t.id.startsWith('tx_stocktake_'))));
+      return [...newFiltered, ...otherEnvTxs];
+    });
+  };
+
+  const setStocks = (updater: React.SetStateAction<StockItem[]>) => {
+    setRawStocks(prev => {
+      const currentFiltered = appEnvironment === 'stocktake'
+        ? prev.filter(s => s.isStockTake === true || s.environment === 'stocktake' || (Boolean(s.id) && s.id.startsWith('stk_stocktake_')))
+        : prev.filter(s => s.isStockTake !== true && s.environment !== 'stocktake' && (!s.id || !s.id.startsWith('stk_stocktake_')));
+      const newFiltered = typeof updater === 'function' ? updater(currentFiltered) : updater;
+      const otherEnvStocks = appEnvironment === 'stocktake'
+        ? prev.filter(s => !(s.isStockTake === true || s.environment === 'stocktake' || (Boolean(s.id) && s.id.startsWith('stk_stocktake_'))))
+        : prev.filter(s => !(s.isStockTake !== true && s.environment !== 'stocktake' && (!s.id || !s.id.startsWith('stk_stocktake_'))));
+      return [...newFiltered, ...otherEnvStocks];
+    });
+  };
+
+  const getStockDocId = (
+    palletSize: string,
+    palletSide: PalletSideType,
+    palletType: string,
+    market: MarketType,
+    unit: QuantityUnit,
+    isStockTake = appEnvironment === 'stocktake'
+  ) => {
+    const prefix = isStockTake ? 'stk_stocktake_' : 'stk_';
+    return `${prefix}${palletSize}_${palletSide}_${palletType}_${market}_${unit}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+  };
 
   const [masterSizes, setMasterSizes] = useState<MasterPalletSize[]>(() => {
     try {
@@ -465,12 +682,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [currentUser]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
-  }, [transactions]);
+    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(rawTransactions));
+  }, [rawTransactions]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.STOCKS, JSON.stringify(stocks));
-  }, [stocks]);
+    localStorage.setItem(STORAGE_KEYS.STOCKS, JSON.stringify(rawStocks));
+  }, [rawStocks]);
+
+  // Reactive reconciliation in memory: whenever transactions change, update local stocks view without network loop
+  useEffect(() => {
+    if (rawTransactions.length > 0) {
+      setRawStocks(prev => consolidateStocks(prev, rawTransactions).consolidated);
+    }
+  }, [rawTransactions]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.EMPLOYEES, JSON.stringify(employees));
@@ -511,7 +735,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       });
       remoteTxs.sort((a, b) => (b.date + ' ' + b.time).localeCompare(a.date + ' ' + a.time));
-      setTransactions(remoteTxs);
+      setRawTransactions(remoteTxs);
+      setRawStocks(prev => consolidateStocks(prev, remoteTxs).consolidated);
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, 'transactions');
     });
@@ -529,20 +754,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       });
 
-      const { consolidated, duplicatesToPrune, canonicalUpdates } = consolidateStocks(remoteStocks);
-      setStocks(consolidated);
-
-      // Self-heal Firestore asynchronously: update canonical doc and remove obsolete duplicates / zeroed docs
-      if (canonicalUpdates.length > 0) {
-        canonicalUpdates.forEach((canon) => {
-          setDoc(doc(db, 'stocks', canon.id), cleanFirestoreData(canon), { merge: true }).catch(() => {});
-        });
-      }
-      if (duplicatesToPrune.length > 0) {
-        duplicatesToPrune.forEach((dupId) => {
-          deleteDoc(doc(db, 'stocks', dupId)).catch(() => {});
-        });
-      }
+      const { consolidated } = consolidateStocks(remoteStocks, rawTransactions);
+      setRawStocks(consolidated);
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, 'stocks');
     });
@@ -870,34 +1083,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showNotification('info', 'Sesi Berakhir', 'Anda telah keluar dari sistem.');
   };
 
-  const isMatchingStock = (
-    item: StockItem,
-    size: string,
-    type: string,
-    market: MarketType,
-    unit?: QuantityUnit,
-    typePallet?: PalletSideType
-  ) => {
-    if (!item) return false;
-    const itemTypePallet = item.typePallet || 'LS';
-    const matchTypePallet = !typePallet || itemTypePallet === typePallet;
-    const itemPalletType = item.palletType ? String(item.palletType).trim().toLowerCase() : '';
-    const targetType = type ? String(type).trim().toLowerCase() : '';
-    const itemMarket = item.marketType ? String(item.marketType).trim().toLowerCase() : '';
-    const targetMarket = market ? String(market).trim().toLowerCase() : '';
-
-    const matchBase =
-      normalizePalletDimension(item.palletSize) === normalizePalletDimension(size) &&
-      itemPalletType === targetType &&
-      itemMarket === targetMarket &&
-      matchTypePallet;
-    
-    if (unit) {
-      return matchBase && item.unit === unit;
-    }
-    return matchBase;
-  };
-
   const getStock = (
     palletSize: string,
     palletType: string,
@@ -908,39 +1093,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const normSize = normalizePalletDimension(palletSize);
     if (!normSize) return 0;
 
-    const cleanPalletType = palletType ? String(palletType).trim().toLowerCase().replace(/^pallet\s+/i, '') : '';
-    const cleanTypePallet = typePallet || 'LS';
+    const normTypePallet = formatTypePallet(typePallet);
+    const normPalletType = formatJenisPallet(palletType);
+    const normMarket = formatMarketType(marketType);
+    const normUnit = unit ? formatSatuan(unit) : undefined;
 
-    // 1. Akumulasi dari seluruh matching record di state stocks (bukan cuma find pertama!)
-    const matchingStocks = stocks.filter(s => s && isMatchingStock(s, normSize, palletType, marketType, unit, cleanTypePallet));
-    const stockSum = matchingStocks.reduce((sum, s) => sum + (typeof s.quantity === 'number' && !isNaN(s.quantity) ? s.quantity : 0), 0);
-
-    // 2. Akumulasi dari ground-truth riwayat transaksi (Penerimaan - Pengeluaran - Ubah Spek)
-    const normMkt = (marketType ? String(marketType).trim().toLowerCase() : 'lokal').replace(/^export$/, 'ekspor');
+    // 1. Akumulasi dari ground-truth riwayat transaksi (Penerimaan - Pengeluaran - Ubah Spek)
     const txs = transactions.filter(t => {
       if (!t) return false;
-      const tNormSize = normalizePalletDimension(t.palletSize);
-      const tTypePallet = t.typePallet || 'LS';
-      const tPalletType = t.palletType ? String(t.palletType).trim().toLowerCase().replace(/^pallet\s+/i, '') : '';
-      const tMarket = (t.marketType ? String(t.marketType).trim().toLowerCase() : 'lokal').replace(/^export$/, 'ekspor');
-
-      if (tNormSize !== normSize) return false;
-      if (tTypePallet !== cleanTypePallet) return false;
-      if (tPalletType !== cleanPalletType) return false;
-      if (tMarket !== normMkt) return false;
-      if (unit && t.unit && t.unit.toLowerCase() !== unit.toLowerCase()) return false;
-      return true;
+      return isMatchingStock(t, normSize, normPalletType, normMarket, normUnit, normTypePallet);
     });
 
-    let txNet = 0;
     if (txs.length > 0) {
-      const inQty = txs.filter(t => t.transactionType === 'PENERIMAAN').reduce((acc, t) => acc + (typeof t.quantity === 'number' ? t.quantity : 0), 0);
-      const outQty = txs.filter(t => t.transactionType === 'PENGELUARAN').reduce((acc, t) => acc + (typeof t.quantity === 'number' ? t.quantity : 0), 0);
-      const changeOutQty = txs.filter(t => t.transactionType === 'UBAH_SPEK').reduce((acc, t) => acc + (typeof t.quantity === 'number' ? t.quantity : 0), 0);
-      txNet = Math.max(0, inQty - outQty - changeOutQty);
+      const inQty = txs
+        .filter(t => t.transactionType === 'PENERIMAAN')
+        .reduce((acc, t) => acc + (typeof t.quantity === 'number' ? t.quantity : 0), 0);
+      const outQty = txs
+        .filter(t => t.transactionType === 'PENGELUARAN')
+        .reduce((acc, t) => acc + (typeof t.quantity === 'number' ? t.quantity : 0), 0);
+      const specOutQty = txs
+        .filter(t => t.transactionType === 'UBAH_SPEK')
+        .reduce((acc, t) => acc + (typeof t.quantity === 'number' ? t.quantity : 0), 0);
+      const specInQty = transactions
+        .filter(t => t && t.transactionType === 'UBAH_SPEK' && t.targetPalletType && isMatchingStock({
+          palletSize: t.palletSize,
+          typePallet: t.typePallet,
+          palletType: t.targetPalletType,
+          marketType: t.marketType,
+          unit: t.unit
+        }, normSize, normPalletType, normMarket, normUnit, normTypePallet))
+        .reduce((acc, t) => acc + (typeof t.quantity === 'number' ? t.quantity : 0), 0);
+
+      return Math.max(0, inQty + specInQty - outQty - specOutQty);
     }
 
-    return Math.max(stockSum, txNet);
+    // 2. Jika belum ada transaksi sama sekali di sistem, ambil dari state stocks
+    const matchingStocks = stocks.filter(s => s && isMatchingStock(s, normSize, normPalletType, normMarket, normUnit, normTypePallet));
+    const stockSum = matchingStocks.reduce((sum, s) => sum + (typeof s.quantity === 'number' && !isNaN(s.quantity) ? s.quantity : 0), 0);
+
+    return Math.max(0, stockSum);
   };
 
   const getStockStatus = (quantity: number): 'AMAN' | 'PERHATIAN' | 'KRITIS' => {
@@ -967,7 +1158,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     noRun?: string;
     operator: string;
     notes?: string;
-  }): Promise<{ success: boolean; message: string; currentStock?: number }> => {
+  }): Promise<{ success: boolean; message: string; currentStock?: number; createdTx?: Transaction }> => {
     if (!canEdit) {
       showNotification('error', 'Akses Ditolak', 'Hanya Operator (Indika, Agus, Harun, Riffky) yang dapat menambah transaksi. Akun Anda berada dalam mode Monitoring.');
       return { success: false, message: 'Hanya Operator yang dapat menginput transaksi.' };
@@ -1001,8 +1192,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const txNumber = `${prefix}-${dateCompact}-${randomSeq}`;
     const uniqueSuffix = Math.random().toString(36).substring(2, 7);
 
+    const isStockTake = appEnvironment === 'stocktake';
+    const txPrefix = isStockTake ? 'tx_stocktake_' : 'tx-';
     const newTx: Transaction = {
-      id: `tx-${Date.now()}-${uniqueSuffix}`,
+      id: `${txPrefix}${Date.now()}-${uniqueSuffix}`,
       transactionNumber: txNumber,
       transactionType: data.transactionType,
       date: data.date,
@@ -1022,10 +1215,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       operatorId: currentUser ? currentUser.id : 'OP-01',
       notes: data.notes?.trim() || '',
       createdBy: currentUser ? currentUser.name : cleanOperator,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      isStockTake: isStockTake,
+      environment: appEnvironment
     };
 
-    const stockDocId = `stk_${cleanSize}_${cleanTypePallet}_${cleanType}_${data.marketType}_${unit}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const stockDocId = getStockDocId(cleanSize, cleanTypePallet, cleanType, data.marketType, unit, isStockTake);
     const stockRef = doc(db, 'stocks', stockDocId);
     const txRef = doc(db, 'transactions', newTx.id);
     const auditId = `aud-${Date.now()}-${uniqueSuffix}`;
@@ -1034,91 +1229,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let finalStockCount = 0;
 
     try {
-      // Atomic Cloud Firestore Transaction
-      await runTransaction(db, async (t) => {
-        const stockDoc = await t.get(stockRef);
-        let currentQty = 0;
-        if (stockDoc.exists()) {
-          const s = stockDoc.data() as StockItem;
-          currentQty = typeof s.quantity === 'number' ? s.quantity : 0;
+      // Ambil saldo stok saat ini langsung dari dokumen stok terpusat (master baseline)
+      const matchStock = stocks.find(s => isMatchingStock(s, cleanSize, cleanType, data.marketType, unit, cleanTypePallet));
+      let currentQty = matchStock && typeof matchStock.quantity === 'number' ? matchStock.quantity : 0;
+
+      if (data.transactionType === 'PENGELUARAN') {
+        if (qty > currentQty) {
+          throw new Error(`STOK_KURANG:${currentQty}`);
         }
+        finalStockCount = currentQty - qty;
+      } else if (data.transactionType === 'PINDAH_KOLOM') {
+        // Relokasi tidak mengubah total stok fisik pallet
+        finalStockCount = currentQty;
+      } else {
+        finalStockCount = currentQty + qty;
+      }
 
-        // Akumulasi ground truth dari transaksi agar pengeluaran dari 2 kolom atau lebih (contoh F12: 50, F9: 45 = 95) tidak terblokir
-        const normTargetMarket = (data.marketType ? String(data.marketType).trim().toLowerCase() : 'lokal').replace(/^export$/, 'ekspor');
-        const matchTxs = transactions.filter(tr => {
-          if (!tr) return false;
-          const trSize = normalizePalletDimension(tr.palletSize);
-          const trTypePallet = tr.typePallet || 'LS';
-          const trType = tr.palletType ? String(tr.palletType).trim().toLowerCase().replace(/^pallet\s+/i, '') : '';
-          const trMarket = (tr.marketType ? String(tr.marketType).trim().toLowerCase() : 'lokal').replace(/^export$/, 'ekspor');
+      // Catat Audit Log
+      const auditLog: AuditLog = {
+        id: auditId,
+        date: data.date,
+        time: data.time || new Date().toTimeString().substring(0, 5),
+        userName: currentUser ? currentUser.name : cleanOperator,
+        employeeId: currentUser ? currentUser.id : 'OP-SYS',
+        activity: data.transactionType === 'PENERIMAAN'
+          ? 'Input Penerimaan'
+          : data.transactionType === 'PINDAH_KOLOM'
+          ? 'Pindah Kolom / Relokasi'
+          : 'Input Pengeluaran',
+        dataBefore: data.transactionType === 'PINDAH_KOLOM'
+          ? `Kolom Asal: ${data.pelatakanPallet || '-'} (${qty} ${unit})`
+          : `Stok Awal: ${currentQty} ${unit}`,
+        dataAfter: data.transactionType === 'PINDAH_KOLOM'
+          ? `${txNumber}: Pindah ke ${data.kolomTujuan || '-'} (${qty} ${unit}) [Total Stok: ${currentQty} ${unit}]`
+          : `${txNumber}: ${cleanSize} [${cleanTypePallet}] ${cleanType} ${data.marketType} (${qty} ${unit}) -> Saldo: ${finalStockCount} ${unit}`
+      };
 
-          return (
-            trSize === cleanSize &&
-            trTypePallet === cleanTypePallet &&
-            trType === cleanType.toLowerCase().replace(/^pallet\s+/i, '') &&
-            trMarket === normTargetMarket &&
-            tr.unit === unit
-          );
-        });
-        const inSum = matchTxs.filter(tr => tr.transactionType === 'PENERIMAAN').reduce((acc, tr) => acc + (typeof tr.quantity === 'number' ? tr.quantity : 0), 0);
-        const outSum = matchTxs.filter(tr => tr.transactionType === 'PENGELUARAN').reduce((acc, tr) => acc + (typeof tr.quantity === 'number' ? tr.quantity : 0), 0);
-        const specSum = matchTxs.filter(tr => tr.transactionType === 'UBAH_SPEK').reduce((acc, tr) => acc + (typeof tr.quantity === 'number' ? tr.quantity : 0), 0);
-        const netTx = Math.max(0, inSum - outSum - specSum);
-
-        if (netTx > currentQty) {
-          currentQty = netTx;
-        }
-
-        if (data.transactionType === 'PENGELUARAN') {
-          if (qty > currentQty) {
-            throw new Error(`STOK_KURANG:${currentQty}`);
-          }
-          finalStockCount = currentQty - qty;
-        } else if (data.transactionType === 'PINDAH_KOLOM') {
-          // Relokasi tidak mengubah total stok fisik pallet
-          finalStockCount = currentQty;
-        } else {
-          finalStockCount = currentQty + qty;
-        }
-
-        // 1. Simpan Transaksi ke Cloud (dibersihkan dari undefined)
-        t.set(txRef, cleanFirestoreData(newTx));
-
-        // 2. Perbarui Saldo Stok Terpusat di Cloud (jika bukan relokasi)
-        t.set(stockRef, {
-          id: stockDocId,
-          palletSize: cleanSize,
-          palletType: cleanType,
-          typePallet: cleanTypePallet,
-          marketType: data.marketType,
-          unit: unit,
-          quantity: finalStockCount,
-          lastUpdated: data.date
-        });
-
-        // 3. Catat Audit Log di Cloud
-        const auditLog: AuditLog = {
-          id: auditId,
-          date: data.date,
-          time: data.time || new Date().toTimeString().substring(0, 5),
-          userName: currentUser ? currentUser.name : cleanOperator,
-          employeeId: currentUser ? currentUser.id : 'OP-SYS',
-          activity: data.transactionType === 'PENERIMAAN'
-            ? 'Input Penerimaan'
-            : data.transactionType === 'PINDAH_KOLOM'
-            ? 'Pindah Kolom / Relokasi'
-            : 'Input Pengeluaran',
-          dataBefore: data.transactionType === 'PINDAH_KOLOM'
-            ? `Kolom Asal: ${data.pelatakanPallet || '-'} (${qty} ${unit})`
-            : `Stok Awal: ${currentQty} ${unit}`,
-          dataAfter: data.transactionType === 'PINDAH_KOLOM'
-            ? `${txNumber}: Pindah ke ${data.kolomTujuan || '-'} (${qty} ${unit}) [Total Stok: ${currentQty} ${unit}]`
-            : `${txNumber}: ${cleanSize} [${cleanTypePallet}] ${cleanType} ${data.marketType} (${qty} ${unit}) -> Saldo: ${finalStockCount} ${unit}`
-        };
-        t.set(auditRef, cleanFirestoreData(auditLog));
-      });
-
-      // Optimistic fallback update, listener onSnapshot will immediately reconcile
+      // 1. Update UI optimis seketika (sub-second response pada HP)
       setTransactions(prev => [newTx, ...prev.filter(x => x.id !== newTx.id)]);
       setStocks(prev => {
         const idx = prev.findIndex(s => isMatchingStock(s, cleanSize, cleanType, data.marketType, unit, cleanTypePallet));
@@ -1137,6 +1284,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           quantity: finalStockCount,
           lastUpdated: data.date
         }];
+      });
+
+      // 2. Simpan Atomic Batch ke Cloud Firestore
+      const batch = writeBatch(db);
+      batch.set(txRef, cleanFirestoreData(newTx));
+      batch.set(stockRef, cleanFirestoreData({
+        id: stockDocId,
+        palletSize: cleanSize,
+        palletType: cleanType,
+        typePallet: cleanTypePallet,
+        marketType: data.marketType,
+        unit: unit,
+        quantity: finalStockCount,
+        lastUpdated: data.date,
+        isStockTake: isStockTake,
+        environment: appEnvironment
+      }), { merge: true });
+      batch.set(auditRef, cleanFirestoreData(auditLog));
+
+      // Kirim ke cloud dengan timeout race (maksimal 3 detik agar HP tidak pernah buffering gantung)
+      await Promise.race([
+        batch.commit(),
+        new Promise(resolve => setTimeout(resolve, 3000))
+      ]).catch(commitErr => {
+        console.warn('Batch async offline commit sync queued:', commitErr);
       });
 
       if (data.transactionType === 'PINDAH_KOLOM') {
@@ -1242,10 +1414,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const dateCompact = params.date.replace(/-/g, '');
     const randomSeq = Math.floor(1000 + Math.random() * 9000);
     const txNumber = `CHG-${dateCompact}-${randomSeq}`;
+    const isStockTake = appEnvironment === 'stocktake';
+    const txPrefix = isStockTake ? 'tx_stocktake_' : 'tx-';
     const uniqueSuffix = Math.random().toString(36).substring(2, 7);
 
     const newTx: Transaction = {
-      id: `tx-${Date.now()}-${uniqueSuffix}`,
+      id: `${txPrefix}${Date.now()}-${uniqueSuffix}`,
       transactionNumber: txNumber,
       transactionType: 'UBAH_SPEK',
       date: params.date,
@@ -1265,11 +1439,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       operatorId: currentUser ? currentUser.id : 'OP-01',
       notes: params.notes?.trim() || '',
       createdBy: currentUser ? currentUser.name : cleanOperator,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      isStockTake: isStockTake,
+      environment: appEnvironment
     };
 
-    const sourceStockDocId = `stk_${cleanSize}_${cleanTypePallet}_${sourcePalletType}_${params.marketType}_${unit}`.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const targetStockDocId = `stk_${cleanSize}_${cleanTypePallet}_${targetPalletType}_${params.marketType}_${unit}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const sourceStockDocId = getStockDocId(cleanSize, cleanTypePallet, sourcePalletType, params.marketType, unit, isStockTake);
+    const targetStockDocId = getStockDocId(cleanSize, cleanTypePallet, targetPalletType, params.marketType, unit, isStockTake);
 
     const sourceStockRef = doc(db, 'stocks', sourceStockDocId);
     const targetStockRef = doc(db, 'stocks', targetStockDocId);
@@ -1281,69 +1457,63 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let finalTargetQty = 0;
 
     try {
-      await runTransaction(db, async (t) => {
-        const sourceDoc = await t.get(sourceStockRef);
-        let curSourceQty = 0;
-        if (sourceDoc.exists()) {
-          const s = sourceDoc.data() as StockItem;
-          curSourceQty = typeof s.quantity === 'number' ? s.quantity : 0;
-        } else {
-          const match = stocks.find(s => isMatchingStock(s, cleanSize, sourcePalletType, params.marketType, unit, cleanTypePallet));
-          if (match) curSourceQty = match.quantity;
-        }
+      const matchSource = stocks.find(s => isMatchingStock(s, cleanSize, sourcePalletType, params.marketType, unit, cleanTypePallet));
+      const curSourceQty = matchSource && typeof matchSource.quantity === 'number' ? matchSource.quantity : 0;
 
-        if (qty > curSourceQty) {
-          throw new Error(`STOK_KURANG:${curSourceQty}`);
-        }
+      if (qty > curSourceQty) {
+        throw new Error(`STOK_KURANG:${curSourceQty}`);
+      }
 
-        finalSourceQty = curSourceQty - qty;
+      finalSourceQty = curSourceQty - qty;
 
-        const targetDoc = await t.get(targetStockRef);
-        let curTargetQty = 0;
-        if (targetDoc.exists()) {
-          const s = targetDoc.data() as StockItem;
-          curTargetQty = typeof s.quantity === 'number' ? s.quantity : 0;
-        } else {
-          const match = stocks.find(s => isMatchingStock(s, cleanSize, targetPalletType, params.marketType, unit, cleanTypePallet));
-          if (match) curTargetQty = match.quantity;
-        }
-        finalTargetQty = curTargetQty + qty;
+      const matchTarget = stocks.find(s => isMatchingStock(s, cleanSize, targetPalletType, params.marketType, unit, cleanTypePallet));
+      const curTargetQty = matchTarget && typeof matchTarget.quantity === 'number' ? matchTarget.quantity : 0;
+      finalTargetQty = curTargetQty + qty;
 
-        t.set(txRef, cleanFirestoreData(newTx));
+      const auditLog: AuditLog = {
+        id: auditId,
+        date: params.date,
+        time: params.time || new Date().toTimeString().substring(0, 5),
+        userName: currentUser ? currentUser.name : cleanOperator,
+        employeeId: currentUser ? currentUser.id : 'OP-SYS',
+        activity: 'Perubahan Spesifikasi Pallet',
+        dataBefore: `${sourcePalletType} di Kolom ${kolomAsal} (Saldo Awal: ${curSourceQty} ${unit})`,
+        dataAfter: `${txNumber}: ${cleanSize} [${cleanTypePallet}] ${sourcePalletType} diubah jadi ${targetPalletType} (${qty} ${unit}) di Kolom ${kolomTujuan} -> Sisa ${sourcePalletType}: ${finalSourceQty} ${unit}, Total ${targetPalletType}: ${finalTargetQty} ${unit}`
+      };
 
-        t.set(sourceStockRef, {
-          id: sourceStockDocId,
-          palletSize: cleanSize,
-          palletType: sourcePalletType,
-          typePallet: cleanTypePallet,
-          marketType: params.marketType,
-          unit: unit,
-          quantity: finalSourceQty,
-          lastUpdated: params.date
-        });
+      const batch = writeBatch(db);
+      batch.set(txRef, cleanFirestoreData(newTx));
+      batch.set(sourceStockRef, cleanFirestoreData({
+        id: sourceStockDocId,
+        palletSize: cleanSize,
+        palletType: sourcePalletType,
+        typePallet: cleanTypePallet,
+        marketType: params.marketType,
+        unit: unit,
+        quantity: finalSourceQty,
+        lastUpdated: params.date,
+        isStockTake: isStockTake,
+        environment: appEnvironment
+      }), { merge: true });
+      batch.set(targetStockRef, cleanFirestoreData({
+        id: targetStockDocId,
+        palletSize: cleanSize,
+        palletType: targetPalletType,
+        typePallet: cleanTypePallet,
+        marketType: params.marketType,
+        unit: unit,
+        quantity: finalTargetQty,
+        lastUpdated: params.date,
+        isStockTake: isStockTake,
+        environment: appEnvironment
+      }), { merge: true });
+      batch.set(auditRef, cleanFirestoreData(auditLog));
 
-        t.set(targetStockRef, {
-          id: targetStockDocId,
-          palletSize: cleanSize,
-          palletType: targetPalletType,
-          typePallet: cleanTypePallet,
-          marketType: params.marketType,
-          unit: unit,
-          quantity: finalTargetQty,
-          lastUpdated: params.date
-        });
-
-        const auditLog: AuditLog = {
-          id: auditId,
-          date: params.date,
-          time: params.time || new Date().toTimeString().substring(0, 5),
-          userName: currentUser ? currentUser.name : cleanOperator,
-          employeeId: currentUser ? currentUser.id : 'OP-SYS',
-          activity: 'Perubahan Spesifikasi Pallet',
-          dataBefore: `${sourcePalletType} di Kolom ${kolomAsal} (Saldo Awal: ${curSourceQty} ${unit})`,
-          dataAfter: `${txNumber}: ${cleanSize} [${cleanTypePallet}] ${sourcePalletType} diubah jadi ${targetPalletType} (${qty} ${unit}) di Kolom ${kolomTujuan} -> Sisa ${sourcePalletType}: ${finalSourceQty} ${unit}, Total ${targetPalletType}: ${finalTargetQty} ${unit}`
-        };
-        t.set(auditRef, cleanFirestoreData(auditLog));
+      await Promise.race([
+        batch.commit(),
+        new Promise(resolve => setTimeout(resolve, 3000))
+      ]).catch(commitErr => {
+        console.warn('Batch async convert commit queued:', commitErr);
       });
 
       setTransactions(prev => [newTx, ...prev.filter(x => x.id !== newTx.id)]);
@@ -1976,8 +2146,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const cleanMarket = params.marketType;
     const cleanUnit = params.unit;
     const targetQty = Math.max(0, Number(params.newQuantity) || 0);
-
-    const stockDocId = `stk_${cleanSize}_${cleanTypePallet}_${cleanType}_${cleanMarket}_${cleanUnit}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const isStockTake = appEnvironment === 'stocktake';
+    const stockDocId = getStockDocId(cleanSize, cleanTypePallet, cleanType, cleanMarket, cleanUnit, isStockTake);
     const stockRef = doc(db, 'stocks', stockDocId);
     const auditId = `aud-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     const auditRef = doc(db, 'auditLogs', auditId);
@@ -1994,7 +2164,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         marketType: cleanMarket,
         unit: cleanUnit,
         quantity: targetQty,
-        lastUpdated: new Date().toISOString().split('T')[0]
+        lastUpdated: new Date().toISOString().split('T')[0],
+        isStockTake: isStockTake,
+        environment: appEnvironment
       };
 
       await setDoc(stockRef, cleanFirestoreData(stockData));
@@ -2439,6 +2611,296 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
 
+  // Sinkronisasi / Cutover hasil Stok Take ke Link Operasional Harian
+  const syncStockTakeToProduction = async (): Promise<{ success: boolean; message: string; count?: number }> => {
+    if (!isAdmin && !isOperator) {
+      showNotification('error', 'Akses Ditolak', 'Hanya Admin atau Operator yang dapat menerapkan hasil stok take.');
+      return { success: false, message: 'Akses ditolak.' };
+    }
+
+    let stockTakeItems = rawStocks.filter(s => s.isStockTake === true || s.environment === 'stocktake' || (Boolean(s.id) && s.id.startsWith('stk_stocktake_')));
+    
+    // Jika di rawStocks belum terformat, cek dari rawTransactions yang diinput di workspace stok take
+    if (stockTakeItems.length === 0) {
+      const stockTakeTxs = rawTransactions.filter(t => t.isStockTake === true || t.environment === 'stocktake' || (Boolean(t.id) && t.id.startsWith('tx_stocktake_')));
+      if (stockTakeTxs.length > 0) {
+        stockTakeItems = consolidateStocks([], stockTakeTxs).consolidated;
+      }
+    }
+
+    if (stockTakeItems.length === 0) {
+      showNotification('warning', 'Data Kosong', 'Belum ada data stok atau transaksi di link Stok Take.');
+      return { success: false, message: 'Belum ada data stok take untuk diterapkan.' };
+    }
+
+    try {
+      const batch = writeBatch(db);
+      let count = 0;
+      const newStockDocIds = new Set<string>();
+      const appliedProdStocks: StockItem[] = [];
+
+      for (const item of stockTakeItems) {
+        const normSize = normalizePalletDimension(item.palletSize);
+        const normTypePallet = formatTypePallet(item.typePallet) as PalletSideType;
+        const normType = formatJenisPallet(item.palletType);
+        const normMarket = formatMarketType(item.marketType) as MarketType;
+        const normUnit = formatSatuan(item.unit) as QuantityUnit;
+
+        const prodStockDocId = `stk_${normSize}_${normTypePallet}_${normType}_${normMarket}_${normUnit}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+        newStockDocIds.add(prodStockDocId);
+        const prodRef = doc(db, 'stocks', prodStockDocId);
+
+        const prodData: StockItem = {
+          id: prodStockDocId,
+          palletSize: normSize,
+          typePallet: normTypePallet,
+          palletType: normType,
+          marketType: normMarket,
+          unit: normUnit,
+          quantity: item.quantity,
+          lastUpdated: new Date().toISOString().split('T')[0],
+          isStockTake: false,
+          environment: 'operasional'
+        };
+
+        batch.set(prodRef, cleanFirestoreData(prodData), { merge: true });
+        appliedProdStocks.push(prodData);
+        count++;
+      }
+
+      // Pastikan stok lama di operasional yang TIDAK tercatat di stok take di-reset ke 0 (TIDAK ADA DATA LAMA TERBAWA)
+      const existingOpStocks = rawStocks.filter(s => s.isStockTake !== true && s.environment !== 'stocktake' && (!s.id || !s.id.startsWith('stk_stocktake_')));
+      for (const oldOp of existingOpStocks) {
+        if (!newStockDocIds.has(oldOp.id)) {
+          const oldRef = doc(db, 'stocks', oldOp.id);
+          const zeroed: StockItem = {
+            ...oldOp,
+            quantity: 0,
+            lastUpdated: new Date().toISOString().split('T')[0],
+            isStockTake: false,
+            environment: 'operasional'
+          };
+          batch.set(oldRef, cleanFirestoreData(zeroed), { merge: true });
+          appliedProdStocks.push(zeroed);
+        }
+      }
+
+      const now = new Date();
+      const auditId = 'aud-' + Date.now();
+      const auditLog: AuditLog = {
+        id: auditId,
+        date: now.toISOString().split('T')[0],
+        time: now.toTimeString().substring(0, 5),
+        userName: currentUser ? currentUser.name : 'Operator',
+        employeeId: currentUser ? currentUser.id : 'OP-01',
+        activity: 'Cutover Stok Take ke Operasional',
+        dataBefore: 'Stok operasional sebelumnya',
+        dataAfter: `Menerapkan ${count} data saldo pallet hasil stok take fisik ke operasional harian. Stok lama yang tidak ada di stok take di-reset ke 0.`
+      };
+      batch.set(doc(db, 'auditLogs', auditId), cleanFirestoreData(auditLog));
+
+      await batch.commit();
+
+      // Perbarui state lokal seketika agar langsung tampil tanpa menunggu reload
+      setRawStocks(prev => {
+        const nonOpStocks = prev.filter(s => s.isStockTake === true || s.environment === 'stocktake' || (Boolean(s.id) && s.id.startsWith('stk_stocktake_')));
+        return [...appliedProdStocks, ...nonOpStocks];
+      });
+
+      showNotification('success', 'Cutover Berhasil', `${count} data stok pallet hasil stok take berhasil diterapkan ke Link Operasional (Stok persis 100% hasil fisik).`);
+      return { success: true, message: `Berhasil menerapkan ${count} data stok take ke operasional.`, count };
+    } catch (err: any) {
+      console.error('Failed to sync stock take to production:', err);
+      showNotification('error', 'Gagal Cutover', 'Terjadi kesalahan saat memindahkan data: ' + err.message);
+      return { success: false, message: err.message };
+    }
+  };
+
+  // Impor file cadangan JSON / hasil stok take langsung ke Cloud Firestore & Memori Lokal
+  const importDatabaseBackup = async (json: any): Promise<{ success: boolean; message: string; count?: number }> => {
+    if (!json || typeof json !== 'object') {
+      showNotification('error', 'Format Tidak Valid', 'File JSON yang diunggah tidak memiliki struktur data yang valid.');
+      return { success: false, message: 'Format data JSON tidak valid.' };
+    }
+
+    try {
+      const batch = writeBatch(db);
+      let stockCount = 0;
+
+      // 1. Master Data (Ukuran, Tipe, Customer, Karyawan, Thresholds)
+      if (Array.isArray(json.masterSizes) && json.masterSizes.length > 0) {
+        setMasterSizes(json.masterSizes);
+        localStorage.setItem(STORAGE_KEYS.SIZES, JSON.stringify(json.masterSizes));
+        for (const s of json.masterSizes) {
+          batch.set(doc(db, 'masterSizes', s.id), cleanFirestoreData(s), { merge: true });
+        }
+      }
+
+      if (Array.isArray(json.masterTypes) && json.masterTypes.length > 0) {
+        setMasterTypes(json.masterTypes);
+        localStorage.setItem(STORAGE_KEYS.TYPES, JSON.stringify(json.masterTypes));
+        for (const t of json.masterTypes) {
+          batch.set(doc(db, 'masterTypes', t.id), cleanFirestoreData(t), { merge: true });
+        }
+      }
+
+      if (Array.isArray(json.masterCustomers) && json.masterCustomers.length > 0) {
+        setMasterCustomers(json.masterCustomers);
+        localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(json.masterCustomers));
+        for (const c of json.masterCustomers) {
+          batch.set(doc(db, 'masterCustomers', c.id), cleanFirestoreData(c), { merge: true });
+        }
+      }
+
+      if (Array.isArray(json.employees) && json.employees.length > 0) {
+        setEmployees(json.employees);
+        localStorage.setItem(STORAGE_KEYS.EMPLOYEES, JSON.stringify(json.employees));
+        for (const e of json.employees) {
+          batch.set(doc(db, 'employees', e.id), cleanFirestoreData(e), { merge: true });
+        }
+      }
+
+      if (json.thresholds) {
+        setThresholds(json.thresholds);
+        localStorage.setItem(STORAGE_KEYS.THRESHOLDS, JSON.stringify(json.thresholds));
+        batch.set(doc(db, 'thresholds', 'default'), cleanFirestoreData(json.thresholds), { merge: true });
+      }
+
+      // Jika hanya file master data (tanpa stok/transaksi)
+      if (json.isMasterOnly && !json.stocks && !json.transactions) {
+        await batch.commit();
+        showNotification('success', 'Master Data Berhasil Dimuat!', 'Master ukuran, customer, dan personil berhasil disimpan ke Cloud Firestore!');
+        return { success: true, message: 'Master data berhasil dimuat ke Cloud Firestore.' };
+      }
+
+      // 2. Data Stok: Ekstrak dari berbagai variasi format file (stocks, stockTake, data, array langsung, dll)
+      let rawStocksList: any[] = [];
+      if (Array.isArray(json)) {
+        rawStocksList = json;
+      } else if (Array.isArray(json.stocks)) {
+        rawStocksList = json.stocks;
+      } else if (Array.isArray(json.stockTake)) {
+        rawStocksList = json.stockTake;
+      } else if (Array.isArray(json.data)) {
+        rawStocksList = json.data;
+      } else if (Array.isArray(json.items)) {
+        rawStocksList = json.items;
+      } else if (Array.isArray(json.stok)) {
+        rawStocksList = json.stok;
+      }
+
+      // Jika file hanya berisi transaksi tanpa array stok terpisah, hitung stok fisik dari transaksi
+      if (rawStocksList.length === 0 && Array.isArray(json.transactions) && json.transactions.length > 0) {
+        const consolidatedFromTx = consolidateStocks([], json.transactions).consolidated;
+        rawStocksList = consolidatedFromTx;
+      }
+
+      if (rawStocksList.length > 0) {
+        const newStockDocIds = new Set<string>();
+        const updatedOperationalStocks: StockItem[] = [];
+
+        for (const rawItem of rawStocksList) {
+          const rawSize = rawItem.palletSize || rawItem.ukuran || rawItem.ukuranPallet || rawItem.dimensi || rawItem.size || '';
+          const normSize = normalizePalletDimension(rawSize);
+          if (!normSize) continue;
+
+          const rawTypePallet = rawItem.typePallet || rawItem.tipeSisi || rawItem.sisi || 'LS';
+          const normTypePallet = formatTypePallet(rawTypePallet) as PalletSideType;
+
+          const rawType = rawItem.palletType || rawItem.jenis || rawItem.tipe || rawItem.jenisPallet || 'Standard';
+          const normType = formatJenisPallet(rawType);
+
+          const rawMarket = rawItem.marketType || rawItem.market || rawItem.pasar || 'Lokal';
+          const normMarket = formatMarketType(rawMarket) as MarketType;
+
+          const rawUnit = rawItem.unit || rawItem.satuan || 'Pcs';
+          const normUnit = formatSatuan(rawUnit) as QuantityUnit;
+
+          const val = rawItem.quantity ?? rawItem.qty ?? rawItem.stok ?? rawItem.jumlah ?? rawItem.total ?? rawItem.saldo ?? 0;
+          const parsedQty = typeof val === 'number' && !isNaN(val) ? Math.max(0, val) : (Math.max(0, Number(val)) || 0);
+
+          const prodStockDocId = `stk_${normSize}_${normTypePallet}_${normType}_${normMarket}_${normUnit}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+          newStockDocIds.add(prodStockDocId);
+          const prodRef = doc(db, 'stocks', prodStockDocId);
+
+          const prodData: StockItem = {
+            id: prodStockDocId,
+            palletSize: normSize,
+            typePallet: normTypePallet,
+            palletType: normType,
+            marketType: normMarket,
+            unit: normUnit,
+            quantity: parsedQty,
+            lastUpdated: rawItem.lastUpdated || new Date().toISOString().split('T')[0],
+            isStockTake: false,
+            environment: 'operasional'
+          };
+
+          batch.set(prodRef, cleanFirestoreData(prodData), { merge: true });
+          updatedOperationalStocks.push(prodData);
+          stockCount++;
+        }
+
+        // Reset stok lama di Firestore yang tidak ada di file impor (agar saldo PERSIS sama dengan file impor)
+        const currentOpStocks = rawStocks.filter(s => s.isStockTake !== true && s.environment !== 'stocktake' && (!s.id || !s.id.startsWith('stk_stocktake_')));
+        for (const oldOp of currentOpStocks) {
+          if (!newStockDocIds.has(oldOp.id)) {
+            const oldRef = doc(db, 'stocks', oldOp.id);
+            const zeroed: StockItem = {
+              ...oldOp,
+              quantity: 0,
+              lastUpdated: new Date().toISOString().split('T')[0],
+              isStockTake: false,
+              environment: 'operasional'
+            };
+            batch.set(oldRef, cleanFirestoreData(zeroed), { merge: true });
+            updatedOperationalStocks.push(zeroed);
+          }
+        }
+
+        // Perbarui state lokal seketika
+        setRawStocks(prev => {
+          const nonOp = prev.filter(s => s.isStockTake === true || s.environment === 'stocktake' || (Boolean(s.id) && s.id.startsWith('stk_stocktake_')));
+          return [...updatedOperationalStocks, ...nonOp];
+        });
+        localStorage.setItem(STORAGE_KEYS.STOCKS, JSON.stringify(updatedOperationalStocks));
+      }
+
+      // 3. Transaksi: Simpan ke Firestore jika ada
+      if (Array.isArray(json.transactions) && json.transactions.length > 0) {
+        setRawTransactions(json.transactions);
+        localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(json.transactions));
+        for (const tx of json.transactions.slice(0, 400)) {
+          batch.set(doc(db, 'transactions', tx.id), cleanFirestoreData(tx), { merge: true });
+        }
+      }
+
+      // 4. Audit Log
+      const now = new Date();
+      const auditId = 'aud-' + Date.now();
+      const auditLog: AuditLog = {
+        id: auditId,
+        date: now.toISOString().split('T')[0],
+        time: now.toTimeString().substring(0, 5),
+        userName: currentUser ? currentUser.name : 'Operator',
+        employeeId: currentUser ? currentUser.id : 'OP-01',
+        activity: 'Impor Cadangan Database / Hasil Stok Take',
+        dataBefore: 'Stok operasional sebelumnya',
+        dataAfter: `Berhasil mengimpor dan menerapkan ${stockCount} saldo stok pallet dari file JSON ke Cloud Firestore & sistem operasional.`
+      };
+      batch.set(doc(db, 'auditLogs', auditId), cleanFirestoreData(auditLog));
+
+      await batch.commit();
+
+      showNotification('success', 'Impor Data Sukses!', `${stockCount} data stok berhasil disimpan permanen ke Cloud Firestore & diterapkan ke sistem.`);
+      return { success: true, message: `Berhasil mengimpor ${stockCount} data stok ke Cloud Firestore.`, count: stockCount };
+    } catch (err: any) {
+      console.error('Import database backup error:', err);
+      showNotification('error', 'Gagal Impor', 'Terjadi kendala saat menyimpan data ke Cloud: ' + (err.message || String(err)));
+      return { success: false, message: err.message || 'Gagal menyimpan ke Cloud Firestore.' };
+    }
+  };
+
   // Reset demo data / bersihkan pengujian & stok dari 0
   const resetDemoData = async (operatorPassword?: string): Promise<{ success: boolean; message: string }> => {
     const trimmedPass = (operatorPassword || '').trim().toLowerCase();
@@ -2449,48 +2911,76 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'Akses Ditolak: Kata sandi Operator salah.' };
     }
 
+    const isStockTake = appEnvironment === 'stocktake';
+
     try {
-      localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, '[]');
-      localStorage.setItem(STORAGE_KEYS.STOCKS, '[]');
-      localStorage.setItem(STORAGE_KEYS.AUDIT, '[]');
-      localStorage.setItem(STORAGE_KEYS.SIZES, '[]');
+      if (isStockTake) {
+        // Reset ONLY stocktake workspace data: Link Operasional is 100% untouched!
+        setRawTransactions(prev => prev.filter(t => !(t.isStockTake === true || t.environment === 'stocktake' || (Boolean(t.id) && t.id.startsWith('tx_stocktake_')))));
+        setRawStocks(prev => prev.filter(s => !(s.isStockTake === true || s.environment === 'stocktake' || (Boolean(s.id) && s.id.startsWith('stk_stocktake_')))));
 
-      setTransactions([]);
-      setStocks([]);
-      setAuditLogs([]);
-      setMasterSizes([]);
+        try {
+          const txSnap = await getDocs(collection(db, 'transactions'));
+          const stocktakeTxs = txSnap.docs.filter(d => {
+            const data = d.data();
+            return data.isStockTake === true || data.environment === 'stocktake' || d.id.startsWith('tx_stocktake_');
+          });
+          await Promise.all(stocktakeTxs.map(d => deleteDoc(doc(db, 'transactions', d.id))));
+        } catch (err) {
+          console.warn('Error clearing stocktake transactions:', err);
+        }
 
-      // Clear online documents in Firestore
-      try {
-        const txSnap = await getDocs(collection(db, 'transactions'));
-        await Promise.all(txSnap.docs.map(d => deleteDoc(doc(db, 'transactions', d.id))));
-      } catch (err) {
-        console.warn('Error clearing firestore transactions:', err);
+        try {
+          const stockSnap = await getDocs(collection(db, 'stocks'));
+          const stocktakeStocks = stockSnap.docs.filter(d => {
+            const data = d.data();
+            return data.isStockTake === true || data.environment === 'stocktake' || d.id.startsWith('stk_stocktake_');
+          });
+          await Promise.all(stocktakeStocks.map(d => deleteDoc(doc(db, 'stocks', d.id))));
+        } catch (err) {
+          console.warn('Error clearing stocktake stocks:', err);
+        }
+
+        showNotification('success', 'Reset Stok Take Berhasil', 'Data di link Stok Take telah dibersihkan menjadi 0. Link operasional harian tetap aman.');
+        return { success: true, message: 'Data stok take berhasil dibersihkan.' };
+      } else {
+        // Operational reset: Clean only transactions, stocks, and audit logs while preserving master sizes & employees
+        setRawTransactions(prev => prev.filter(t => t.isStockTake === true || t.environment === 'stocktake' || (Boolean(t.id) && t.id.startsWith('tx_stocktake_'))));
+        setRawStocks(prev => prev.filter(s => s.isStockTake === true || s.environment === 'stocktake' || (Boolean(s.id) && s.id.startsWith('stk_stocktake_'))));
+        setAuditLogs([]);
+
+        try {
+          const txSnap = await getDocs(collection(db, 'transactions'));
+          const opTxs = txSnap.docs.filter(d => {
+            const data = d.data();
+            return data.isStockTake !== true && data.environment !== 'stocktake' && !d.id.startsWith('tx_stocktake_');
+          });
+          await Promise.all(opTxs.map(d => deleteDoc(doc(db, 'transactions', d.id))));
+        } catch (err) {
+          console.warn('Error clearing firestore transactions:', err);
+        }
+
+        try {
+          const stockSnap = await getDocs(collection(db, 'stocks'));
+          const opStocks = stockSnap.docs.filter(d => {
+            const data = d.data();
+            return data.isStockTake !== true && data.environment !== 'stocktake' && !d.id.startsWith('stk_stocktake_');
+          });
+          await Promise.all(opStocks.map(d => deleteDoc(doc(db, 'stocks', d.id))));
+        } catch (err) {
+          console.warn('Error clearing firestore stocks:', err);
+        }
+
+        try {
+          const auditSnap = await getDocs(collection(db, 'auditLogs'));
+          await Promise.all(auditSnap.docs.map(d => deleteDoc(doc(db, 'auditLogs', d.id))));
+        } catch (err) {
+          console.warn('Error clearing firestore audit logs:', err);
+        }
+
+        showNotification('success', 'Reset Berhasil', 'Seluruh data transaksi dan stok berhasil dibersihkan ke 0 (Master Ukuran & Akun tetap utuh).');
+        return { success: true, message: 'Data operasional berhasil dibersihkan.' };
       }
-
-      try {
-        const stockSnap = await getDocs(collection(db, 'stocks'));
-        await Promise.all(stockSnap.docs.map(d => deleteDoc(doc(db, 'stocks', d.id))));
-      } catch (err) {
-        console.warn('Error clearing firestore stocks:', err);
-      }
-
-      try {
-        const auditSnap = await getDocs(collection(db, 'auditLogs'));
-        await Promise.all(auditSnap.docs.map(d => deleteDoc(doc(db, 'auditLogs', d.id))));
-      } catch (err) {
-        console.warn('Error clearing firestore audit logs:', err);
-      }
-
-      try {
-        const sizeSnap = await getDocs(collection(db, 'masterSizes'));
-        await Promise.all(sizeSnap.docs.map(d => deleteDoc(doc(db, 'masterSizes', d.id))));
-      } catch (err) {
-        console.warn('Error clearing firestore master sizes:', err);
-      }
-
-      showNotification('success', 'Reset Berhasil', 'Seluruh data transaksi, saldo stok, dan ukuran berhasil dibersihkan. Sistem kembali pure kosong dari awal.');
-      return { success: true, message: 'Data pengujian dan daftar ukuran berhasil dibersihkan, stok di-reset ke 0.' };
     } catch (err) {
       console.error('Reset error:', err);
       showNotification('error', 'Gagal Reset', 'Terjadi kendala saat membersihkan data.');
@@ -2512,6 +3002,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         theme,
         setTheme,
         toggleTheme,
+        appEnvironment,
+        setAppEnvironment,
+        syncStockTakeToProduction,
         transactions,
         stocks,
         employees,
@@ -2545,7 +3038,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteEmployee,
         changePassword,
         toggleEmployee,
-        resetDemoData
+        resetDemoData,
+        importDatabaseBackup
       }}
     >
       {children}

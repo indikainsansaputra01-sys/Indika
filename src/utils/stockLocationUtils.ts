@@ -242,24 +242,39 @@ export function calculateLocationStock(transactions: Transaction[]) {
         }
       }
     } else if (tx.transactionType === 'PINDAH_KOLOM') {
-      // 1. Kurangi dari kolom asal
-      const sourceCol = normalizeColumnName(tx.pelatakanPallet);
-      if (!locationMap.has(sourceCol)) {
-        locationMap.set(sourceCol, new Map());
+      const sourceAllocations = parseColumnAllocations(tx.pelatakanPallet, tx.quantity);
+      let remainingNeeded = tx.quantity;
+
+      // 1. Kurangi dari alokasi kolom-kolom asal
+      for (const alloc of sourceAllocations) {
+        const sourceCol = normalizeColumnName(alloc.column);
+        if (locationMap.has(sourceCol)) {
+          const colItemsMap = locationMap.get(sourceCol)!;
+          if (colItemsMap.has(itemKey)) {
+            const it = colItemsMap.get(itemKey)!;
+            const take = Math.min(it.quantity, alloc.qty, remainingNeeded);
+            it.quantity -= take;
+            it.lastUpdated = tx.date;
+            remainingNeeded -= take;
+          }
+        }
       }
-      const sourceColItems = locationMap.get(sourceCol)!;
-      const sourceExisting = sourceColItems.get(itemKey) || {
-        palletSize: normSize,
-        palletType: txPalletType,
-        typePallet: txTypePallet,
-        marketType: tx.marketType || 'Lokal',
-        unit: tx.unit || 'Set',
-        quantity: 0,
-        lastUpdated: tx.date || ''
-      };
-      sourceExisting.quantity = Math.max(0, sourceExisting.quantity - tx.quantity);
-      sourceExisting.lastUpdated = tx.date;
-      sourceColItems.set(itemKey, sourceExisting);
+
+      // Fallback jika saldo di kolom asal kurang
+      if (remainingNeeded > 0) {
+        for (const [cName, itemsMap] of locationMap.entries()) {
+          if (remainingNeeded <= 0) break;
+          if (itemsMap.has(itemKey)) {
+            const it = itemsMap.get(itemKey)!;
+            if (it.quantity > 0) {
+              const take = Math.min(it.quantity, remainingNeeded);
+              it.quantity -= take;
+              it.lastUpdated = tx.date;
+              remainingNeeded -= take;
+            }
+          }
+        }
+      }
 
       // 2. Tambahkan ke kolom tujuan relokasi
       const targetCol = normalizeColumnName(tx.kolomTujuan);
@@ -280,24 +295,39 @@ export function calculateLocationStock(transactions: Transaction[]) {
       targetExisting.lastUpdated = tx.date;
       targetColItems.set(itemKey, targetExisting);
     } else if (tx.transactionType === 'UBAH_SPEK') {
-      // 1. Kurangi dari kolom asal untuk Spek Asal
-      const sourceCol = normalizeColumnName(tx.pelatakanPallet);
-      if (!locationMap.has(sourceCol)) {
-        locationMap.set(sourceCol, new Map());
+      const sourceAllocations = parseColumnAllocations(tx.pelatakanPallet, tx.quantity);
+      let remainingNeeded = tx.quantity;
+
+      // 1. Kurangi dari kolom-kolom asal untuk Spek Asal
+      for (const alloc of sourceAllocations) {
+        const sourceCol = normalizeColumnName(alloc.column);
+        if (locationMap.has(sourceCol)) {
+          const colItemsMap = locationMap.get(sourceCol)!;
+          if (colItemsMap.has(itemKey)) {
+            const it = colItemsMap.get(itemKey)!;
+            const take = Math.min(it.quantity, alloc.qty, remainingNeeded);
+            it.quantity -= take;
+            it.lastUpdated = tx.date;
+            remainingNeeded -= take;
+          }
+        }
       }
-      const sourceColItems = locationMap.get(sourceCol)!;
-      const sourceExisting = sourceColItems.get(itemKey) || {
-        palletSize: normSize,
-        palletType: txPalletType,
-        typePallet: txTypePallet,
-        marketType: tx.marketType || 'Lokal',
-        unit: tx.unit || 'Set',
-        quantity: 0,
-        lastUpdated: tx.date || ''
-      };
-      sourceExisting.quantity = Math.max(0, sourceExisting.quantity - tx.quantity);
-      sourceExisting.lastUpdated = tx.date;
-      sourceColItems.set(itemKey, sourceExisting);
+
+      // Fallback jika saldo di kolom asal kurang
+      if (remainingNeeded > 0) {
+        for (const [cName, itemsMap] of locationMap.entries()) {
+          if (remainingNeeded <= 0) break;
+          if (itemsMap.has(itemKey)) {
+            const it = itemsMap.get(itemKey)!;
+            if (it.quantity > 0) {
+              const take = Math.min(it.quantity, remainingNeeded);
+              it.quantity -= take;
+              it.lastUpdated = tx.date;
+              remainingNeeded -= take;
+            }
+          }
+        }
+      }
 
       // 2. Tambahkan ke kolom tujuan untuk Spek Baru (targetPalletType)
       const targetCol = normalizeColumnName(tx.kolomTujuan || tx.pelatakanPallet);
@@ -529,8 +559,9 @@ export function calculateDailyStock(
         (s.unit ? String(s.unit).trim().toLowerCase() : '') === String(data.unit).toLowerCase()
     );
 
-    const currentTotal = matchedStock ? matchedStock.quantity : Math.max(0, data.startQty + data.inToday - data.outToday);
+    const hasMutasi = data.startQty > 0 || data.inToday > 0 || data.outToday > 0;
     const availableToday = Math.max(0, data.startQty + data.inToday - data.outToday);
+    const currentTotal = hasMutasi ? availableToday : (matchedStock ? matchedStock.quantity : 0);
     const effectiveStartQty = data.startQty;
 
     // Sesuai permintaan user: tetap sertakan jika tercatat di master/stok meskipun saldo 0

@@ -52,7 +52,10 @@ export async function getCompanyLogoBase64DataUrl(): Promise<string | null> {
   if (typeof window === 'undefined') return null;
 
   try {
-    const res = await fetch('/assets/aistudio/PT_Indah_Kiat_Pulp___Paper_Tbk_-_Karir_Industri_5468d9cf.png');
+    let res = await fetch('/assets/aistudio/pt_indah_kiat_logo_trimmed.png');
+    if (!res.ok) {
+      res = await fetch('/assets/aistudio/pt_indah_kiat_logo_white_stroke.png');
+    }
     if (!res.ok) return null;
     const blob = await res.blob();
 

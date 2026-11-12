@@ -18,10 +18,13 @@ export interface Employee {
   title: string; // e.g. "Operator & Admin", "Operator Finish Pallet", "Supervisor (SPV)"
   active: boolean;
   nik?: string; // NIK karyawan (cth: 2002934 untuk Indika)
+  shiftPreference?: ShiftType;
   password?: string;
   lastPasswordChangedAt?: string;
   avatarVariant?: 'indika_glasses' | 'operator_yellow' | 'officer_white_1' | 'officer_white_2' | string;
 }
+
+export type AppEnvironment = 'operasional' | 'stocktake';
 
 export interface StockItem {
   id: string;
@@ -32,6 +35,8 @@ export interface StockItem {
   unit: QuantityUnit; // Set / Pcs
   quantity: number;
   lastUpdated: string;
+  isStockTake?: boolean;
+  environment?: AppEnvironment;
 }
 
 export interface Transaction {
@@ -40,7 +45,10 @@ export interface Transaction {
   transactionType: TransactionType;
   date: string; // YYYY-MM-DD
   time: string; // HH:mm
+  timestamp?: number;
   palletSize: string; // Ketik sendiri
+  isStockTake?: boolean;
+  environment?: AppEnvironment;
   palletType: string; // Pallet Reamwrap, Pallet Bulkpack, Pallet Racuk, Pallet Sirkulasi (atau Wrap Type Asal saat UBAH_SPEK)
   targetPalletType?: string; // Khusus UBAH_SPEK: Wrap Type tujuan hasil perubahan
   typePallet?: PalletSideType; // LS (Long Side) atau SS (Short Side)

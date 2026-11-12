@@ -16,9 +16,14 @@ export const Pengaturan: React.FC = () => {
     masterSizes,
     masterTypes,
     masterCustomers,
+    employees,
     showNotification,
     theme,
-    setTheme
+    setTheme,
+    appEnvironment,
+    setAppEnvironment,
+    syncStockTakeToProduction,
+    importDatabaseBackup
   } = useApp();
 
   const [safeMin, setSafeMin] = useState(thresholds.safeMin);
@@ -28,18 +33,44 @@ export const Pengaturan: React.FC = () => {
   const [operatorPasswordInput, setOperatorPasswordInput] = useState('');
   const [resetError, setResetError] = useState('');
   const [isResetting, setIsResetting] = useState(false);
-  const [copiedLink, setCopiedLink] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [copiedOpLink, setCopiedOpLink] = useState(false);
+  const [copiedStkLink, setCopiedStkLink] = useState(false);
+  const [showCutoverModal, setShowCutoverModal] = useState(false);
+  const [isSyncingCutover, setIsSyncingCutover] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleCopyWebLink = () => {
+  const handleCopyOpLink = () => {
     try {
       const url = `${window.location.origin}/finishpalletikk`;
       navigator.clipboard.writeText(url);
-      setCopiedLink(true);
-      showNotification('success', 'Tautan Web Berhasil Disalin', `Tautan ${url} telah disalin ke clipboard.`);
-      setTimeout(() => setCopiedLink(false), 3000);
+      setCopiedOpLink(true);
+      showNotification('success', 'Link Operasional Disalin', `${url} berhasil disalin ke clipboard.`);
+      setTimeout(() => setCopiedOpLink(false), 2500);
     } catch {
-      showNotification('info', 'Tautan Web Finish Pallet IKK', `${window.location.origin}/finishpalletikk`);
+      showNotification('info', 'Link Operasional', `${window.location.origin}/finishpalletikk`);
+    }
+  };
+
+  const handleCopyStkLink = () => {
+    try {
+      const url = `${window.location.origin}/stocktake`;
+      navigator.clipboard.writeText(url);
+      setCopiedStkLink(true);
+      showNotification('success', 'Link Stok Take Disalin', `${url} berhasil disalin ke clipboard.`);
+      setTimeout(() => setCopiedStkLink(false), 2500);
+    } catch {
+      showNotification('info', 'Link Stok Take', `${window.location.origin}/stocktake`);
+    }
+  };
+
+  const handleConfirmCutover = async () => {
+    setIsSyncingCutover(true);
+    const res = await syncStockTakeToProduction();
+    setIsSyncingCutover(false);
+    setShowCutoverModal(false);
+    if (res.success) {
+      setAppEnvironment('operasional');
     }
   };
 
@@ -83,6 +114,7 @@ export const Pengaturan: React.FC = () => {
       masterSizes,
       masterTypes,
       masterCustomers,
+      employees,
       thresholds,
       auditLogs
     };
@@ -91,10 +123,33 @@ export const Pengaturan: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `FPMS_BACKUP_DATA_${new Date().toISOString().split('T')[0]}.json`;
+    a.download = `FPMS_BACKUP_LENGKAP_${new Date().toISOString().split('T')[0]}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    showNotification('success', 'Backup Berhasil', 'File cadangan data operasional berhasil diunduh.');
+    showNotification('success', 'Backup Lengkap Berhasil', 'File cadangan lengkap (stok, riwayat transaksi & master data) berhasil diunduh.');
+  };
+
+  const handleDownloadMasterOnly = () => {
+    const masterData = {
+      appName: 'Finish Pallet Management System - Master Data Only',
+      exportDate: new Date().toISOString(),
+      exportBy: currentUser?.name || 'Operator',
+      isMasterOnly: true,
+      masterSizes,
+      masterTypes,
+      masterCustomers,
+      employees,
+      thresholds
+    };
+
+    const blob = new Blob([JSON.stringify(masterData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `FPMS_MASTER_DATA_SAJA_${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showNotification('success', 'Master Data Berhasil Disimpan', 'File Master Data (Akun Karyawan, Ukuran Pallet, & Customer) berhasil diunduh tanpa riwayat transaksi.');
   };
 
   const handleUploadBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -102,26 +157,19 @@ export const Pengaturan: React.FC = () => {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       try {
+        setIsImporting(true);
+        showNotification('info', 'Mengimpor Data...', 'Sedang membaca file dan menyimpan data stok ke Cloud Firestore...');
         const json = JSON.parse(event.target?.result as string);
-        if (json.transactions && json.stocks) {
-          localStorage.setItem('fpms_transactions_v3', JSON.stringify(json.transactions));
-          localStorage.setItem('fpms_stocks_v3', JSON.stringify(json.stocks));
-          if (json.thresholds) localStorage.setItem('fpms_thresholds_v3', JSON.stringify(json.thresholds));
-          if (json.masterSizes) localStorage.setItem('fpms_sizes_v3', JSON.stringify(json.masterSizes));
-          if (json.masterTypes) localStorage.setItem('fpms_types_v3', JSON.stringify(json.masterTypes));
-          if (json.masterCustomers) localStorage.setItem('fpms_customers_v3', JSON.stringify(json.masterCustomers));
-          
-          showNotification('success', 'Data Dipulihkan', 'Data berhasil dipulihkan dari file cadangan. Halaman akan dimuat ulang...');
-          setTimeout(() => {
-            window.location.reload();
-          }, 1200);
-        } else {
-          showNotification('error', 'Format Tidak Valid', 'Format file backup tidak valid.');
+        const res = await importDatabaseBackup(json);
+        setIsImporting(false);
+        if (res.success) {
+          if (fileInputRef.current) fileInputRef.current.value = '';
         }
-      } catch (err) {
-        showNotification('error', 'Gagal Membaca File', 'Gagal membaca file backup JSON.');
+      } catch (err: any) {
+        setIsImporting(false);
+        showNotification('error', 'Gagal Membaca File', 'File JSON tidak dapat diproses: ' + (err.message || String(err)));
       }
     };
     reader.readAsText(file);
@@ -147,69 +195,166 @@ export const Pengaturan: React.FC = () => {
       {/* PWA Installation Card */}
       <PWAInstallButton variant="full" />
 
-      {/* Website Link & Access Card (Finish Pallet IKK URL) */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 shadow-xs space-y-4">
-        <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+      {/* Manajemen 2 Link Sistem: Link Operasional vs Link Stok Take Baru */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 shadow-xs space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 gap-2">
           <div className="flex items-center gap-2">
-            <Globe className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            <Globe className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
             <h2 className="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wide">
-              Tautan & Alamat Web Sistem Finish Pallet IKK
+              Manajemen 2 Link Sistem (Operasional Harian vs Stok Take Baru)
             </h2>
           </div>
-          <span className="text-[11px] font-mono px-2 py-0.5 rounded font-bold uppercase bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700">
-            ONLINE
-          </span>
+          <div className="flex items-center gap-2">
+            <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-extrabold uppercase border ${
+              appEnvironment === 'stocktake'
+                ? 'bg-sky-100 dark:bg-sky-950/60 text-sky-800 dark:text-sky-300 border-sky-300 dark:border-sky-700'
+                : 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700'
+            }`}>
+              AKTIF: {appEnvironment === 'stocktake' ? 'LINK STOK TAKE' : 'LINK OPERASIONAL'}
+            </span>
+          </div>
         </div>
 
         <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-          Sistem Finish Pallet IKK dapat diakses langsung oleh seluruh tim pabrik melalui tautan web dengan unsur <b>/finishpalletikk</b> berikut:
+          Sesuai kebutuhan lapangan pabrik, sistem telah disediakan dalam <b>2 link terpisah</b> agar operasional harian tidak terganggu saat Anda melakukan proses stok take fisik baru dari 0:
         </p>
 
-        {/* URL Display with Copy Button */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 p-3 bg-slate-50 dark:bg-slate-950/80 rounded-xl border border-slate-200 dark:border-slate-800">
-          <div className="flex items-center gap-2 min-w-0 flex-1 px-1">
-            <LinkIcon className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-            <code className="text-xs sm:text-sm font-mono text-emerald-700 dark:text-emerald-300 font-bold break-all select-all">
-              {typeof window !== 'undefined' ? `${window.location.origin}/finishpalletikk` : '/finishpalletikk'}
-            </code>
+        {/* 2 Links Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Link 1: Operasional Harian */}
+          <div className={`p-4 rounded-xl border transition-all ${
+            appEnvironment === 'operasional'
+              ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-400 dark:border-emerald-700 ring-2 ring-emerald-500/20'
+              : 'bg-slate-50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-750'
+          }`}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-bold text-emerald-900 dark:text-emerald-300 flex items-center gap-1.5 uppercase">
+                <span className="w-2 h-2 rounded-full bg-emerald-600 shrink-0"></span>
+                Link 1: Operasional Berjalan
+              </span>
+              {appEnvironment === 'operasional' ? (
+                <span className="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded font-extrabold">
+                  SEDANG DIBUKA
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setAppEnvironment('operasional')}
+                  className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300 hover:underline cursor-pointer"
+                >
+                  Buka Link Ini ➔
+                </button>
+              )}
+            </div>
+
+            <p className="text-[11px] text-slate-600 dark:text-slate-400 mb-3 leading-relaxed">
+              Dipakai harian untuk pengeluaran dan penerimaan saat ini. Data mutasi & saldo stok di link ini <b>aman dan tidak terganggu</b>.
+            </p>
+
+            <div className="flex items-center gap-1.5 p-2 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-750 mb-3">
+              <LinkIcon className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              <code className="text-xs font-mono font-bold text-emerald-700 dark:text-emerald-300 truncate select-all flex-1">
+                {typeof window !== 'undefined' ? `${window.location.origin}/finishpalletikk` : '/finishpalletikk'}
+              </code>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleCopyOpLink}
+                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+              >
+                {copiedOpLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedOpLink ? 'Tersalin!' : 'Salin Link Operasional'}</span>
+              </button>
+              {appEnvironment !== 'operasional' && (
+                <button
+                  type="button"
+                  onClick={() => setAppEnvironment('operasional')}
+                  className="py-1.5 px-3 rounded-lg bg-white dark:bg-slate-800 hover:bg-slate-100 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-200 text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Buka
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Link 2: Stok Take Baru */}
+          <div className={`p-4 rounded-xl border transition-all ${
+            appEnvironment === 'stocktake'
+              ? 'bg-sky-50/70 dark:bg-sky-950/30 border-sky-400 dark:border-sky-700 ring-2 ring-sky-500/20'
+              : 'bg-slate-50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-750'
+          }`}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-bold text-sky-900 dark:text-sky-300 flex items-center gap-1.5 uppercase">
+                <span className="w-2 h-2 rounded-full bg-sky-500 animate-pulse shrink-0"></span>
+                Link 2: Stok Take Baru (Bersih)
+              </span>
+              {appEnvironment === 'stocktake' ? (
+                <span className="text-[10px] bg-sky-600 text-white px-2 py-0.5 rounded font-extrabold">
+                  SEDANG DIBUKA
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setAppEnvironment('stocktake')}
+                  className="text-[11px] font-bold text-sky-700 dark:text-sky-300 hover:underline cursor-pointer"
+                >
+                  Buka Link Ini ➔
+                </button>
+              )}
+            </div>
+
+            <p className="text-[11px] text-slate-600 dark:text-slate-400 mb-3 leading-relaxed">
+              Khusus untuk menginput hasil stok take fisik baru dari 0. Seluruh master ukuran dan karyawan tetap tersedia sehingga Anda tidak perlu mengetik ulang akun/ukuran.
+            </p>
+
+            <div className="flex items-center gap-1.5 p-2 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-750 mb-3">
+              <LinkIcon className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+              <code className="text-xs font-mono font-bold text-sky-700 dark:text-sky-300 truncate select-all flex-1">
+                {typeof window !== 'undefined' ? `${window.location.origin}/stocktake` : '/stocktake'}
+              </code>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleCopyStkLink}
+                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+              >
+                {copiedStkLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedStkLink ? 'Tersalin!' : 'Salin Link Stok Take'}</span>
+              </button>
+              {appEnvironment !== 'stocktake' && (
+                <button
+                  type="button"
+                  onClick={() => setAppEnvironment('stocktake')}
+                  className="py-1.5 px-3 rounded-lg bg-white dark:bg-slate-800 hover:bg-slate-100 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-200 text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Buka
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Cutover Feature: Terapkan Hasil Stok Take ke Link Operasional */}
+        <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-750 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-0.5">
+            <div className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+              <span>Fitur Otomatis: Terapkan Hasil Stok Take ke Link Operasional (Cutover)</span>
+            </div>
+            <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
+              Ketika Anda sudah selesai menginput seluruh saldo fisik terbaru di Link Stok Take (/stocktake), Anda dapat menerapkan hasilnya langsung ke Link Operasional dengan satu klik tanpa perlu reset manual.
+            </p>
           </div>
           <button
             type="button"
-            onClick={handleCopyWebLink}
-            className="flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer shrink-0"
+            onClick={() => setShowCutoverModal(true)}
+            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 dark:bg-slate-700 dark:hover:bg-slate-600 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer shrink-0 shadow-2xs"
           >
-            {copiedLink ? (
-              <>
-                <Check className="w-3.5 h-3.5 text-white" />
-                <span>Tersalin!</span>
-              </>
-            ) : (
-              <>
-                <Copy className="w-3.5 h-3.5 text-white" />
-                <span>Salin Tautan</span>
-              </>
-            )}
+            Terapkan ke Operasional ➔
           </button>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-          <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-750 text-xs text-slate-600 dark:text-slate-400 space-y-1">
-            <div className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-              <span>Unsur URL /finishpalletikk</span>
-            </div>
-            <p className="text-[11px] leading-relaxed">
-              Tautan web ini memuat alamat <b>/finishpalletikk</b> tanpa perlu domain berbayar .com. Tautan ini aman (enkripsi SSL HTTPS) dan dapat dibagikan ke seluruh operator serta grup kerja.
-            </p>
-          </div>
-
-          <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-750 text-xs text-slate-600 dark:text-slate-400 space-y-1">
-            <div className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-              <span>Bisa Dipasang di Layar Utama HP & PC</span>
-            </div>
-            <p className="text-[11px] leading-relaxed">
-              Dapat dibuka di browser Chrome, Edge, Safari, dan dipasang langsung ke layar HP / desktop seperti aplikasi native tanpa perlu mengetik ulang link setiap kali kerja.
-            </p>
-          </div>
         </div>
       </div>
 
@@ -303,21 +448,37 @@ export const Pengaturan: React.FC = () => {
           Amankan seluruh catatan stok, transaksi, dan riwayat audit mutasi pallet ke dalam file cadangan JSON. Anda dapat mengunduhnya secara rutin untuk arsip fisik atau memindahkannya ke komputer/tablet lain.
         </p>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
           <button
             type="button"
             onClick={handleDownloadBackup}
-            className="p-3 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-lg text-left transition-colors flex items-center justify-between cursor-pointer group"
+            className="p-3 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-950/70 border border-emerald-300 dark:border-emerald-700 rounded-lg text-left transition-colors flex items-center justify-between cursor-pointer group"
           >
             <div>
-              <div className="font-bold text-xs text-emerald-950 group-hover:text-emerald-900">
-                Unduh Cadangan Data (Backup JSON)
+              <div className="font-bold text-xs text-emerald-950 dark:text-emerald-200 group-hover:text-emerald-900">
+                1. Unduh Cadangan Lengkap
               </div>
-              <div className="text-[11px] text-emerald-700">
-                Simpan seluruh stok & transaksi saat ini ke komputer
+              <div className="text-[11px] text-emerald-700 dark:text-emerald-300">
+                Simpan stok, riwayat, & master data
               </div>
             </div>
-            <Download className="w-4 h-4 text-emerald-700 shrink-0" />
+            <Download className="w-4 h-4 text-emerald-700 dark:text-emerald-300 shrink-0" />
+          </button>
+
+          <button
+            type="button"
+            onClick={handleDownloadMasterOnly}
+            className="p-3 bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/40 dark:hover:bg-sky-950/70 border border-sky-300 dark:border-sky-700 rounded-lg text-left transition-colors flex items-center justify-between cursor-pointer group"
+          >
+            <div>
+              <div className="font-bold text-xs text-sky-950 dark:text-sky-200 group-hover:text-sky-900">
+                2. Unduh Master Data Saja
+              </div>
+              <div className="text-[11px] text-sky-700 dark:text-sky-300">
+                Untuk Website Baru (tanpa stok/transaksi)
+              </div>
+            </div>
+            <Download className="w-4 h-4 text-sky-700 dark:text-sky-300 shrink-0" />
           </button>
 
           <div>
@@ -330,18 +491,19 @@ export const Pengaturan: React.FC = () => {
             />
             <button
               type="button"
+              disabled={isImporting}
               onClick={() => fileInputRef.current?.click()}
-              className="w-full h-full p-3 bg-slate-50 hover:bg-slate-100 border border-slate-300 rounded-lg text-left transition-colors flex items-center justify-between cursor-pointer group"
+              className="w-full h-full p-3 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800/50 dark:hover:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-left transition-colors flex items-center justify-between cursor-pointer group disabled:opacity-60 disabled:cursor-not-allowed"
             >
               <div>
-                <div className="font-bold text-xs text-slate-900 group-hover:text-slate-800">
-                  Pulihkan Data dari File (Restore JSON)
+                <div className="font-bold text-xs text-slate-900 dark:text-white group-hover:text-slate-800">
+                  {isImporting ? 'Menyimpan ke Cloud Firestore...' : '3. Impor Hasil Stok Take / Cadangan'}
                 </div>
-                <div className="text-[11px] text-slate-500">
-                  Muat ulang data dari file arsip cadangan sebelumnya
+                <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {isImporting ? 'Mohon tunggu sebentar...' : 'Terapkan saldo stok fisik langsung ke Cloud'}
                 </div>
               </div>
-              <Upload className="w-4 h-4 text-slate-700 shrink-0" />
+              <Upload className={`w-4 h-4 text-slate-700 dark:text-slate-300 shrink-0 ${isImporting ? 'animate-bounce text-emerald-600' : ''}`} />
             </button>
           </div>
         </div>
@@ -532,6 +694,65 @@ export const Pengaturan: React.FC = () => {
                   <>
                     <RotateCcw className="w-3.5 h-3.5" />
                     <span>Ya, Bersihkan & Mulai Dari 0</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* In-App Confirmation Modal for Cutover / Terapkan Stok Take ke Operasional */}
+      {showCutoverModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs">
+          <div className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-sky-700 dark:text-sky-400">
+              <div className="p-2.5 bg-sky-100 dark:bg-sky-950/80 rounded-lg">
+                <Globe className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Terapkan Hasil Stok Take ke Link Operasional
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Cutover Otomatis Data Stok Fisik
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800 rounded-lg text-xs text-sky-950 dark:text-sky-200 space-y-2 leading-relaxed">
+              <p className="font-bold">📋 INFORMASI CUTOVER:</p>
+              <ul className="list-disc list-inside space-y-1 text-[11px]">
+                <li>Semua saldo stok yang telah diinput di <b>/stocktake</b> akan disalin menjadi stok utama di <b>/finishpalletikk</b>.</li>
+                <li>Operasional pabrik selanjutnya otomatis melanjutkan saldo fisik yang baru ini.</li>
+                <li>Riwayat audit log cutover akan dicatat otomatis di sistem.</li>
+              </ul>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowCutoverModal(false)}
+                disabled={isSyncingCutover}
+                className="px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg cursor-pointer transition-colors"
+              >
+                Batalkan
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmCutover}
+                disabled={isSyncingCutover}
+                className="px-4 py-2 text-xs font-bold bg-sky-600 hover:bg-sky-700 disabled:bg-sky-400 text-white rounded-lg flex items-center gap-2 cursor-pointer transition-colors shadow-sm"
+              >
+                {isSyncingCutover ? (
+                  <>
+                    <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>Menerapkan...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Ya, Terapkan ke Operasional</span>
                   </>
                 )}
               </button>
